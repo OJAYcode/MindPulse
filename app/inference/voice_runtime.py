@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-import sounddevice as sd
 
 from app.utils.io import read_json
 from training.voice.data import audio_to_mel_spectrogram
@@ -26,6 +25,14 @@ class VoiceRuntime:
         self.record_seconds = record_seconds
 
     def record_audio(self) -> np.ndarray:
+        try:
+            import sounddevice as sd
+        except (ImportError, OSError) as exc:
+            raise RuntimeError(
+                "Local microphone recording requires PortAudio. "
+                "Install the local development dependencies before running live laptop inference."
+            ) from exc
+
         samples = int(self.sample_rate * self.record_seconds)
         recording = sd.rec(samples, samplerate=self.sample_rate, channels=1, dtype="float32")
         sd.wait()
