@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: mindpulse-api
+    env: docker
+    plan: starter
+    autoDeploy: true
+    healthCheckPath: /health
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: API_HOST
+        value: 0.0.0.0
+      - key: DATABASE_URL
+        value: sqlite:///./stress_results.db
+      - key: FACE_MODEL_PATH
+        value: ./models/face_emotion_model.weights.h5
+      - key: FACE_LABELS_PATH
+        value: ./models/face_labels.json
+      - key: VOICE_MODEL_PATH
+        value: ./models/voice_emotion_model.weights.h5
+      - key: VOICE_LABELS_PATH
+        value: ./models/voice_labels.json
+      - key: VOICE_PREPROCESSING_PATH
+        value: ./models/voice_preprocessing.json
+      - key: FUSION_RULES_PATH
+        value: ./models/fusion_rules.json
+      - key: AUDIO_SAMPLE_RATE
+        value: "16000"
+      - key: AUDIO_RECORD_SECONDS
+        value: "3"
+      - key: FRONTEND_ORIGINS
+        sync: false

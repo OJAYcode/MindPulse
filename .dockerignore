@@ -1,0 +1,16 @@
+.git
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
+data/raw
+data/processed
+face_datasets
+audio_datasets
+new face_datasets
+new audio_datasets
+frontend/node_modules
+frontend/.next
+stress_results.db
+.env

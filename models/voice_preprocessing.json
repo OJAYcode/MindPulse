@@ -1,0 +1,5 @@
+{
+  "sample_rate": 16000,
+  "n_mels": 64,
+  "synthetic_data": true
+}

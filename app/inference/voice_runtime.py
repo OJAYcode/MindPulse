@@ -1,0 +1,61 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+import sounddevice as sd
+
+from app.utils.io import read_json
+from training.voice.data import audio_to_mel_spectrogram
+from training.voice.model import load_voice_model
+
+
+@dataclass(slots=True)
+class VoicePrediction:
+    label: str
+    confidence: float
+    probabilities: dict[str, float]
+
+
+class VoiceRuntime:
+    def __init__(self, model_path: Path, labels_path: Path, sample_rate: int, record_seconds: int) -> None:
+        self.labels = read_json(labels_path, default=[])
+        self.model = load_voice_model(model_path, (64, 184, 1), len(self.labels))
+        self.sample_rate = sample_rate
+        self.record_seconds = record_seconds
+
+    def record_audio(self) -> np.ndarray:
+        samples = int(self.sample_rate * self.record_seconds)
+        recording = sd.rec(samples, samplerate=self.sample_rate, channels=1, dtype="float32")
+        sd.wait()
+        return np.squeeze(recording, axis=1)
+
+    def predict_from_audio_samples(self, samples: np.ndarray) -> VoicePrediction:
+        temp_path = Path("data/processed/voice/live_temp.wav").resolve()
+        temp_path.parent.mkdir(parents=True, exist_ok=True)
+        import soundfile as sf
+
+        sf.write(temp_path, samples, self.sample_rate)
+        mel = audio_to_mel_spectrogram(temp_path, sample_rate=self.sample_rate, clip_duration=self.record_seconds)
+        batch = np.expand_dims(mel, axis=0)
+        probabilities = self.model.predict(batch, verbose=0)[0]
+        label_index = int(np.argmax(probabilities))
+        label = self.labels[label_index] if self.labels else str(label_index)
+        return VoicePrediction(
+            label=label,
+            confidence=float(probabilities[label_index]),
+            probabilities={self.labels[i]: float(probabilities[i]) for i in range(len(probabilities))},
+        )
+
+    def predict_from_audio_file(self, audio_path: Path) -> VoicePrediction:
+        mel = audio_to_mel_spectrogram(audio_path, sample_rate=self.sample_rate, clip_duration=self.record_seconds)
+        batch = np.expand_dims(mel, axis=0)
+        probabilities = self.model.predict(batch, verbose=0)[0]
+        label_index = int(np.argmax(probabilities))
+        label = self.labels[label_index] if self.labels else str(label_index)
+        return VoicePrediction(
+            label=label,
+            confidence=float(probabilities[label_index]),
+            probabilities={self.labels[i]: float(probabilities[i]) for i in range(len(probabilities))},
+        )

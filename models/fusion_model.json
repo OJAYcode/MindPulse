@@ -1,0 +1,36 @@
+{
+  "fusion_model_path": "C:\\Users\\HP\\Documents\\Stressor\\models\\fusion_model.pkl",
+  "stress_labels": [
+    "low",
+    "medium",
+    "high"
+  ],
+  "training_pairs": 1500,
+  "demo_mode": false,
+  "face_classes": [
+    "angry",
+    "happy",
+    "neutral",
+    "sad"
+  ],
+  "voice_classes": [
+    "calm",
+    "happy",
+    "neutral",
+    "sad",
+    "stressed"
+  ],
+  "classes_seen_by_model": [
+    "0",
+    "1",
+    "2"
+  ],
+  "training_target_note": "Targets are generated from the default rule-based late fusion mapping. This logistic model is an optional experimental add-on, not the primary presentation-ready fusion path.",
+  "target_distribution": {
+    "low": 324,
+    "medium": 544,
+    "high": 632
+  },
+  "face_max_files_per_class": 750,
+  "voice_max_files_per_class": 192
+}

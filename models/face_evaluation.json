@@ -1,0 +1,12 @@
+{
+  "accuracy": 0.465,
+  "precision": 0.5575414309389107,
+  "recall": 0.465,
+  "f1": 0.4300619037311611,
+  "labels": [
+    "angry",
+    "happy",
+    "neutral",
+    "sad"
+  ]
+}

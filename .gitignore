@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Local environment
+.env
+.env.local
+
+# Databases and generated runtime files
+*.db
+.mplconfig/
+pytest-cache-files-*/
+
+# Datasets and trained model binaries can be very large.
+data/raw/
+data/processed/
+face_datasets/
+audio_datasets/
+new face_datasets/
+new audio_datasets/
+models/*.h5
+models/*.keras
+models/*.pkl
+
+# Keep lightweight model metadata/results tracked if desired.
+!models/face_emotion_model.weights.h5
+!models/voice_emotion_model.weights.h5
+!models/fusion_model.pkl
+!models/*.json
+!models/*.png
+!models/*.csv
+
+# Node / Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.env.local
+
+# OS/editor
+.DS_Store
+Thumbs.db
