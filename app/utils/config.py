@@ -18,6 +18,15 @@ def _csv_env(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+DEFAULT_FRONTEND_ORIGINS = ",".join(
+    [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://mind-pulse-two.vercel.app",
+    ]
+)
+
+
 @dataclass(slots=True)
 class Settings:
     app_env: str = os.getenv("APP_ENV", "development")
@@ -49,9 +58,7 @@ class Settings:
 
     def __post_init__(self) -> None:
         if self.frontend_origins is None:
-            self.frontend_origins = _csv_env(
-                os.getenv("FRONTEND_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
-            )
+            self.frontend_origins = _csv_env(os.getenv("FRONTEND_ORIGINS", DEFAULT_FRONTEND_ORIGINS))
 
 
 def get_settings() -> Settings:

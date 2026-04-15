@@ -42,7 +42,7 @@ VOICE_PREPROCESSING_PATH=./models/voice_preprocessing.json
 FUSION_RULES_PATH=./models/fusion_rules.json
 AUDIO_SAMPLE_RATE=16000
 AUDIO_RECORD_SECONDS=3
-FRONTEND_ORIGINS=https://your-frontend-domain.vercel.app
+FRONTEND_ORIGINS=https://mind-pulse-two.vercel.app
 ```
 
 Important:
