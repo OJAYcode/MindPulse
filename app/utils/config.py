@@ -32,7 +32,8 @@ class Settings:
     app_env: str = os.getenv("APP_ENV", "development")
     api_host: str = os.getenv("API_HOST", "127.0.0.1")
     api_port: int = int(os.getenv("API_PORT", "8000"))
-    database_url: str = os.getenv("DATABASE_URL", "sqlite:///./stress_results.db")
+    mongodb_uri: str = os.getenv("MONGODB_URI", "mongodb://127.0.0.1:27017/mindpulse")
+    mongodb_database: str | None = os.getenv("MONGODB_DATABASE")
     log_level: str = os.getenv("LOG_LEVEL", "INFO").upper()
 
     face_data_dir: Path = _resolve_path(os.getenv("FACE_DATA_DIR", "./data/raw/face"))

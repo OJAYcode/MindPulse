@@ -13,7 +13,7 @@ Next.js frontend
 FastAPI backend
   runs face model + voice model + fusion
         |
-SQLite database
+MongoDB database
 ```
 
 Camera and microphone access requires HTTPS in deployment. `localhost` works during development.
@@ -33,7 +33,8 @@ Required environment variables:
 
 ```text
 APP_ENV=production
-DATABASE_URL=sqlite:///./stress_results.db
+MONGODB_URI=mongodb+srv://<username>:<password>@<cluster-url>/mindpulse?retryWrites=true&w=majority
+MONGODB_DATABASE=mindpulse
 FACE_MODEL_PATH=./models/face_emotion_model.weights.h5
 FACE_LABELS_PATH=./models/face_labels.json
 VOICE_MODEL_PATH=./models/voice_emotion_model.weights.h5
@@ -48,7 +49,7 @@ FRONTEND_ORIGINS=https://mind-pulse-two.vercel.app
 Important:
 
 - The active model files are included in the repository because the hosted backend needs them.
-- SQLite is acceptable for a demo deployment, but a production deployment should move to a persistent managed database.
+- MongoDB keeps accounts, sessions, and inference history across redeploys, so hosted users are not lost when the backend restarts.
 - Free/low-memory hosts may struggle with TensorFlow. Use a plan with enough RAM.
 
 ## 2. Frontend Hosting

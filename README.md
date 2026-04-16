@@ -1,6 +1,6 @@
 # Multimodal Stress Detection System
 
-This project implements a complete local multimodal stress-detection pipeline using only a laptop webcam and laptop microphone. It trains a facial emotion model, trains a voice emotion or stress-tendency model, combines both branches with late fusion, runs live inference, and stores results through a FastAPI backend backed by SQLite.
+This project implements a complete local multimodal stress-detection pipeline using only a laptop webcam and laptop microphone. It trains a facial emotion model, trains a voice emotion or stress-tendency model, combines both branches with late fusion, runs live inference, and stores results through a FastAPI backend backed by MongoDB.
 
 ## Why this is still a multimodal system
 
@@ -361,5 +361,5 @@ Performance depends on the local dataset you provide. The project does not inven
 - separate face and voice branches
 - clear late-fusion multimodal design
 - honest handling of separate datasets through paired calibration for fusion
-- FastAPI plus SQLite backend for dashboard integration
+- FastAPI plus MongoDB backend for dashboard integration
 - demo mode available before full datasets are ready

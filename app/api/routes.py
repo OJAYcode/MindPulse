@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile, status
+from pymongo.errors import DuplicateKeyError
 
 from app.api.schemas import (
     AuthResponse,
@@ -18,7 +19,23 @@ from app.api.schemas import (
     UserOut,
     UserProfileUpdate,
 )
-from app.db.database import get_connection, initialize_database
+from app.db.database import (
+    create_inference_result as create_inference_result_record,
+    create_session,
+    create_user,
+    delete_session_by_token_hash,
+    delete_sessions_by_user_id,
+    get_dashboard_summary_data,
+    get_latest_inference_result,
+    get_user_by_email,
+    get_user_by_id,
+    get_user_by_username,
+    get_user_for_session,
+    initialize_database,
+    list_inference_history,
+    update_user_password,
+    update_user_profile,
+)
 from app.inference.upload_runtime import analyze_uploaded_sample
 from app.utils.security import create_token, hash_password, hash_token, verify_password
 
@@ -28,7 +45,7 @@ SESSION_DAYS = 7
 
 
 def _row_to_user(row) -> UserOut:
-    username = row["username"] if "username" in row.keys() and row["username"] else row["email"].split("@", 1)[0]
+    username = row["username"] if row.get("username") else row["email"].split("@", 1)[0]
     return UserOut(id=row["id"], name=row["name"], username=username, email=row["email"], created_at=row["created_at"])
 
 
@@ -50,17 +67,7 @@ def get_current_user(authorization: str | None = Header(default=None)) -> UserOu
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required.")
     token_digest = hash_token(token)
-    now = datetime.now(timezone.utc).isoformat()
-    with get_connection() as connection:
-        row = connection.execute(
-            """
-            SELECT users.id, users.name, users.username, users.email, users.created_at
-            FROM auth_sessions
-            JOIN users ON users.id = auth_sessions.user_id
-            WHERE auth_sessions.token_hash = ? AND auth_sessions.expires_at > ?
-            """,
-            (token_digest, now),
-        ).fetchone()
+    row = get_user_for_session(token_digest, datetime.now(timezone.utc))
     if row is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token.")
     return _row_to_user(row)
@@ -71,53 +78,13 @@ def get_optional_user(authorization: str | None = Header(default=None)) -> UserO
     if not token:
         return None
     token_digest = hash_token(token)
-    now = datetime.now(timezone.utc).isoformat()
-    with get_connection() as connection:
-        row = connection.execute(
-            """
-            SELECT users.id, users.name, users.username, users.email, users.created_at
-            FROM auth_sessions
-            JOIN users ON users.id = auth_sessions.user_id
-            WHERE auth_sessions.token_hash = ? AND auth_sessions.expires_at > ?
-            """,
-            (token_digest, now),
-        ).fetchone()
+    row = get_user_for_session(token_digest, datetime.now(timezone.utc))
     return _row_to_user(row) if row is not None else None
 
 
 def _insert_inference_result(payload: InferenceResultIn, user_id: int | None) -> InferenceResultOut:
-    with get_connection() as connection:
-        cursor = connection.execute(
-            """
-            INSERT INTO inference_results (
-                user_id,
-                timestamp,
-                face_emotion,
-                face_confidence,
-                voice_emotion,
-                voice_confidence,
-                stress_level,
-                source
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                user_id,
-                payload.timestamp.isoformat(),
-                payload.face_emotion,
-                payload.face_confidence,
-                payload.voice_emotion,
-                payload.voice_confidence,
-                payload.stress_level,
-                payload.source,
-            ),
-        )
-        connection.commit()
-        record_id = cursor.lastrowid
-    return InferenceResultOut(id=record_id, user_id=user_id, **payload.model_dump())
-    try:
-        return get_current_user(authorization)
-    except HTTPException:
-        return None
+    record = create_inference_result_record(payload.model_dump(), user_id)
+    return InferenceResultOut(**record)
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -130,60 +97,31 @@ def health() -> HealthResponse:
 def register(payload: UserCreate) -> AuthResponse:
     email = payload.email.strip().lower()
     username = payload.username.strip().lower()
-    created_at = datetime.now(timezone.utc).isoformat()
-    with get_connection() as connection:
-        existing = connection.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
-        if existing is not None:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email is already registered.")
-        existing_username = connection.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
-        if existing_username is not None:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username is already taken.")
-        cursor = connection.execute(
-            """
-            INSERT INTO users (name, username, email, password_hash, created_at)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (payload.name.strip(), username, email, hash_password(payload.password), created_at),
-        )
-        user_id = cursor.lastrowid
-        token = create_token()
-        expires_at = (datetime.now(timezone.utc) + timedelta(days=SESSION_DAYS)).isoformat()
-        connection.execute(
-            """
-            INSERT INTO auth_sessions (user_id, token_hash, created_at, expires_at)
-            VALUES (?, ?, ?, ?)
-            """,
-            (user_id, hash_token(token), created_at, expires_at),
-        )
-        connection.commit()
-        row = connection.execute(
-            "SELECT id, name, username, email, created_at FROM users WHERE id = ?",
-            (user_id,),
-        ).fetchone()
+    created_at = datetime.now(timezone.utc)
+    if get_user_by_email(email) is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email is already registered.")
+    if get_user_by_username(username) is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username is already taken.")
+    try:
+        row = create_user(payload.name.strip(), username, email, hash_password(payload.password), created_at)
+    except DuplicateKeyError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Account details already exist.") from exc
+    token = create_token()
+    expires_at = datetime.now(timezone.utc) + timedelta(days=SESSION_DAYS)
+    create_session(row["id"], hash_token(token), created_at, expires_at)
     return AuthResponse(token=token, user=_row_to_user(row))
 
 
 @router.post("/auth/login", response_model=AuthResponse)
 def login(payload: UserLogin) -> AuthResponse:
     email = payload.email.strip().lower()
-    with get_connection() as connection:
-        row = connection.execute(
-            "SELECT id, name, username, email, password_hash, created_at FROM users WHERE email = ?",
-            (email,),
-        ).fetchone()
-        if row is None or not verify_password(payload.password, row["password_hash"]):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password.")
-        token = create_token()
-        created_at = datetime.now(timezone.utc).isoformat()
-        expires_at = (datetime.now(timezone.utc) + timedelta(days=SESSION_DAYS)).isoformat()
-        connection.execute(
-            """
-            INSERT INTO auth_sessions (user_id, token_hash, created_at, expires_at)
-            VALUES (?, ?, ?, ?)
-            """,
-            (row["id"], hash_token(token), created_at, expires_at),
-        )
-        connection.commit()
+    row = get_user_by_email(email, include_password_hash=True)
+    if row is None or not verify_password(payload.password, row["password_hash"]):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password.")
+    token = create_token()
+    created_at = datetime.now(timezone.utc)
+    expires_at = datetime.now(timezone.utc) + timedelta(days=SESSION_DAYS)
+    create_session(row["id"], hash_token(token), created_at, expires_at)
     return AuthResponse(token=token, user=_row_to_user(row))
 
 
@@ -201,32 +139,16 @@ def update_profile(
 ) -> UserOut:
     email = payload.email.strip().lower()
     username = payload.username.strip().lower()
-    with get_connection() as connection:
-        existing_email = connection.execute(
-            "SELECT id FROM users WHERE email = ? AND id != ?",
-            (email, current_user.id),
-        ).fetchone()
-        if existing_email is not None:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email is already registered.")
-        existing_username = connection.execute(
-            "SELECT id FROM users WHERE username = ? AND id != ?",
-            (username, current_user.id),
-        ).fetchone()
-        if existing_username is not None:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username is already taken.")
-        connection.execute(
-            """
-            UPDATE users
-            SET name = ?, username = ?, email = ?
-            WHERE id = ?
-            """,
-            (payload.name.strip(), username, email, current_user.id),
-        )
-        connection.commit()
-        row = connection.execute(
-            "SELECT id, name, username, email, created_at FROM users WHERE id = ?",
-            (current_user.id,),
-        ).fetchone()
+    existing_email = get_user_by_email(email)
+    if existing_email is not None and existing_email["id"] != current_user.id:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email is already registered.")
+    existing_username = get_user_by_username(username)
+    if existing_username is not None and existing_username["id"] != current_user.id:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username is already taken.")
+    try:
+        row = update_user_profile(current_user.id, payload.name.strip(), username, email)
+    except DuplicateKeyError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Profile details already exist.") from exc
     return _row_to_user(row)
 
 
@@ -235,19 +157,11 @@ def change_password(
     payload: PasswordChange,
     current_user: UserOut = Depends(get_current_user),
 ) -> StatusResponse:
-    with get_connection() as connection:
-        row = connection.execute(
-            "SELECT password_hash FROM users WHERE id = ?",
-            (current_user.id,),
-        ).fetchone()
-        if row is None or not verify_password(payload.current_password, row["password_hash"]):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect.")
-        connection.execute(
-            "UPDATE users SET password_hash = ? WHERE id = ?",
-            (hash_password(payload.new_password), current_user.id),
-        )
-        connection.execute("DELETE FROM auth_sessions WHERE user_id = ?", (current_user.id,))
-        connection.commit()
+    row = get_user_by_id(current_user.id, include_password_hash=True)
+    if row is None or not verify_password(payload.current_password, row["password_hash"]):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect.")
+    update_user_password(current_user.id, hash_password(payload.new_password))
+    delete_sessions_by_user_id(current_user.id)
     return StatusResponse(status="password_updated")
 
 
@@ -255,9 +169,7 @@ def change_password(
 def logout(authorization: str | None = Header(default=None)) -> StatusResponse:
     token = _extract_bearer_token(authorization)
     if token:
-        with get_connection() as connection:
-            connection.execute("DELETE FROM auth_sessions WHERE token_hash = ?", (hash_token(token),))
-            connection.commit()
+        delete_session_by_token_hash(hash_token(token))
     return StatusResponse(status="ok")
 
 
@@ -303,20 +215,9 @@ async def analyze_sample(
 
 @router.get("/latest-result", response_model=InferenceResultOut)
 def latest_result() -> InferenceResultOut:
-    with get_connection() as connection:
-        row = connection.execute(
-            """
-            SELECT id, timestamp, face_emotion, face_confidence, voice_emotion,
-                   voice_confidence, stress_level, source, user_id
-            FROM inference_results
-            ORDER BY id DESC
-            LIMIT 1
-            """
-        ).fetchone()
-
+    row = get_latest_inference_result()
     if row is None:
         raise HTTPException(status_code=404, detail="No inference results found.")
-
     return _row_to_result(row)
 
 
@@ -325,18 +226,7 @@ def history(
     limit: int = Query(default=20, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ) -> list[InferenceResultOut]:
-    with get_connection() as connection:
-        rows = connection.execute(
-            """
-            SELECT id, timestamp, face_emotion, face_confidence, voice_emotion,
-                   voice_confidence, stress_level, source, user_id
-            FROM inference_results
-            ORDER BY id DESC
-            LIMIT ? OFFSET ?
-            """,
-            (limit, offset),
-        ).fetchall()
-
+    rows = list_inference_history(limit=limit, offset=offset)
     return [_row_to_result(row) for row in rows]
 
 
@@ -345,46 +235,20 @@ def dashboard_summary(
     current_user: UserOut = Depends(get_current_user),
     limit: int = Query(default=8, ge=1, le=50),
 ) -> DashboardSummary:
-    with get_connection() as connection:
-        rows = connection.execute(
-            """
-            SELECT id, timestamp, face_emotion, face_confidence, voice_emotion,
-                   voice_confidence, stress_level, source, user_id
-            FROM inference_results
-            WHERE user_id = ? OR user_id IS NULL
-            ORDER BY id DESC
-            LIMIT ?
-            """,
-            (current_user.id, limit),
-        ).fetchall()
-        aggregate = connection.execute(
-            """
-            SELECT
-                COUNT(*) AS total_results,
-                AVG(face_confidence) AS average_face_confidence,
-                AVG(voice_confidence) AS average_voice_confidence,
-                SUM(CASE WHEN stress_level = 'low' THEN 1 ELSE 0 END) AS low_count,
-                SUM(CASE WHEN stress_level = 'medium' THEN 1 ELSE 0 END) AS medium_count,
-                SUM(CASE WHEN stress_level = 'high' THEN 1 ELSE 0 END) AS high_count
-            FROM inference_results
-            WHERE user_id = ? OR user_id IS NULL
-            """,
-            (current_user.id,),
-        ).fetchone()
-
+    rows, aggregate = get_dashboard_summary_data(current_user.id, limit=limit)
     recent_results = [_row_to_result(row) for row in rows]
-    total_results = int(aggregate["total_results"] or 0)
-    high_count = int(aggregate["high_count"] or 0)
+    total_results = int(aggregate.get("total_results", 0) or 0)
+    high_count = int(aggregate.get("high_count", 0) or 0)
     return DashboardSummary(
         total_results=total_results,
         latest_result=recent_results[0] if recent_results else None,
         stress_distribution=StressDistribution(
-            low=int(aggregate["low_count"] or 0),
-            medium=int(aggregate["medium_count"] or 0),
+            low=int(aggregate.get("low_count", 0) or 0),
+            medium=int(aggregate.get("medium_count", 0) or 0),
             high=high_count,
         ),
-        average_face_confidence=float(aggregate["average_face_confidence"] or 0.0),
-        average_voice_confidence=float(aggregate["average_voice_confidence"] or 0.0),
+        average_face_confidence=float(aggregate.get("average_face_confidence", 0.0) or 0.0),
+        average_voice_confidence=float(aggregate.get("average_voice_confidence", 0.0) or 0.0),
         high_stress_rate=float(high_count / total_results) if total_results else 0.0,
         recent_results=recent_results,
     )

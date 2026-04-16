@@ -1,19 +1,32 @@
+import os
 from fastapi.testclient import TestClient
 from uuid import uuid4
 
+os.environ.setdefault("MONGODB_URI", "mongomock://localhost/mindpulse_test_bootstrap")
+os.environ.setdefault("MONGODB_DATABASE", "mindpulse_test_bootstrap")
+
 from app.inference.upload_runtime import UploadedInferenceResult
+from app.db.database import reset_database_state
 from app.api.main import create_app
 
 
+def _client_for_test():
+    suffix = uuid4().hex
+    os.environ["MONGODB_URI"] = f"mongomock://localhost/mindpulse_test_{suffix}"
+    os.environ["MONGODB_DATABASE"] = f"mindpulse_test_{suffix}"
+    reset_database_state()
+    return TestClient(create_app())
+
+
 def test_health_endpoint():
-    client = TestClient(create_app())
+    client = _client_for_test()
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
 
 
 def test_auth_and_dashboard_flow():
-    client = TestClient(create_app())
+    client = _client_for_test()
     suffix = uuid4().hex[:8]
     email = f"demo.{suffix}@example.com"
     username = f"demo_{suffix}"
@@ -95,7 +108,7 @@ def test_upload_sample_endpoint(monkeypatch):
         )
 
     monkeypatch.setattr(routes, "analyze_uploaded_sample", fake_analyze_uploaded_sample)
-    client = TestClient(create_app())
+    client = _client_for_test()
     suffix = uuid4().hex[:8]
     auth_response = client.post(
         "/auth/register",
