@@ -191,6 +191,39 @@ input:focus {
   box-shadow: 0 0 0 4px rgba(31, 122, 104, 0.12);
 }
 
+.password-field {
+  position: relative;
+}
+
+.password-field input {
+  padding-right: 54px;
+}
+
+.password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  transform: translateY(-50%);
+}
+
+.password-toggle:hover {
+  background: rgba(31, 122, 104, 0.08);
+  color: var(--ink);
+}
+
+.password-toggle svg {
+  width: 18px;
+  height: 18px;
+}
+
 .primary-button {
   padding: 14px 18px;
   background: var(--ink);
