@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { useMemo, useRef, useState } from "react";
 import { analyzeSample, changePassword, updateProfile } from "../lib/api";
 import { captureVideoFrame, recordAudioSample } from "../lib/capture";
@@ -15,11 +16,64 @@ type DashboardProps = {
   onLogout: () => void;
 };
 
+type DashboardView = "overview" | "history" | "profile";
+
 const stressTone: Record<StressLevel, string> = {
   low: "tone-low",
   medium: "tone-medium",
   high: "tone-high"
 };
+
+const dashboardTabs: { key: DashboardView; label: string; icon: ReactNode }[] = [
+  {
+    key: "overview",
+    label: "Overview",
+    icon: (
+      <svg aria-hidden="true" viewBox="0 0 24 24">
+        <path
+          d="M4 12.5 12 5l8 7.5M7.5 10v8h9v-8"
+          fill="none"
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth="1.9"
+        />
+      </svg>
+    )
+  },
+  {
+    key: "history",
+    label: "History",
+    icon: (
+      <svg aria-hidden="true" viewBox="0 0 24 24">
+        <path
+          d="M12 7.5v5l3.5 2M20 12a8 8 0 1 1-2.34-5.66M20 4v4h-4"
+          fill="none"
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth="1.9"
+        />
+      </svg>
+    )
+  },
+  {
+    key: "profile",
+    label: "Profile",
+    icon: (
+      <svg aria-hidden="true" viewBox="0 0 24 24">
+        <path
+          d="M12 12a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm-6 7a6 6 0 0 1 12 0"
+          fill="none"
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth="1.9"
+        />
+      </svg>
+    )
+  }
+];
 
 function percent(value: number) {
   return `${Math.round(value * 100)}%`;
@@ -73,7 +127,7 @@ export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserU
   const historyResults = rawData.recent_results;
   const latestStress = data.latest_result?.stress_level ?? "low";
   const distributionTotal = Math.max(data.total_results, 1);
-  const [activeView, setActiveView] = useState<"overview" | "history" | "profile">("overview");
+  const [activeView, setActiveView] = useState<DashboardView>("overview");
   const [riskFilter, setRiskFilter] = useState<"all" | StressLevel>("all");
   const [query, setQuery] = useState("");
   const [profileName, setProfileName] = useState(user.name);
@@ -191,15 +245,17 @@ export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserU
       </section>
 
       <section className="dashboard-tabs" aria-label="Dashboard sections">
-        <button className={activeView === "overview" ? "active" : ""} onClick={() => setActiveView("overview")}>
-          Overview
-        </button>
-        <button className={activeView === "history" ? "active" : ""} onClick={() => setActiveView("history")}>
-          History
-        </button>
-        <button className={activeView === "profile" ? "active" : ""} onClick={() => setActiveView("profile")}>
-          Profile
-        </button>
+        {dashboardTabs.map((tab) => (
+          <button
+            key={tab.key}
+            className={activeView === tab.key ? "active" : ""}
+            onClick={() => setActiveView(tab.key)}
+            type="button"
+          >
+            <span className="tab-icon">{tab.icon}</span>
+            <span className="tab-label">{tab.label}</span>
+          </button>
+        ))}
       </section>
 
       <section className="panel session-panel">
@@ -475,11 +531,11 @@ export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserU
               ) : (
                 historyResults.map((result) => (
                   <tr key={result.id}>
-                    <td>{new Date(result.timestamp).toLocaleString()}</td>
-                    <td>{result.face_emotion} - {percent(result.face_confidence)}</td>
-                    <td>{result.voice_emotion} - {percent(result.voice_confidence)}</td>
-                    <td><span className={`status-pill ${stressTone[result.stress_level]}`}>{result.stress_level}</span></td>
-                    <td>{formatSource(result.source)}</td>
+                    <td data-label="Time">{new Date(result.timestamp).toLocaleString()}</td>
+                    <td data-label="Expression">{result.face_emotion} - {percent(result.face_confidence)}</td>
+                    <td data-label="Voice">{result.voice_emotion} - {percent(result.voice_confidence)}</td>
+                    <td data-label="Risk"><span className={`status-pill ${stressTone[result.stress_level]}`}>{result.stress_level}</span></td>
+                    <td data-label="Channel">{formatSource(result.source)}</td>
                   </tr>
                 ))
               )}
