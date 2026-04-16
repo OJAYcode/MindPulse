@@ -103,7 +103,7 @@ export function AuthPanel({ onAuthenticated }: AuthPanelProps) {
           {error && <div className="form-error">{error}</div>}
 
           <button className="primary-button" disabled={submitting} type="submit">
-            {submitting ? "Please wait..." : mode === "login" ? "Enter workspace" : "Create workspace"}
+            {submitting ? "Please wait..." : mode === "login" ? "Log in" : "Sign up"}
           </button>
         </form>
       </section>

@@ -16,7 +16,7 @@ type DashboardProps = {
   onLogout: () => void;
 };
 
-type DashboardView = "overview" | "history" | "profile";
+type DashboardView = "overview" | "session" | "history" | "profile";
 
 const stressTone: Record<StressLevel, string> = {
   low: "tone-low",
@@ -24,7 +24,7 @@ const stressTone: Record<StressLevel, string> = {
   high: "tone-high"
 };
 
-const dashboardTabs: { key: DashboardView; label: string; icon: ReactNode }[] = [
+const desktopTabs: { key: DashboardView; label: string; icon: ReactNode }[] = [
   {
     key: "overview",
     label: "Overview",
@@ -32,6 +32,22 @@ const dashboardTabs: { key: DashboardView; label: string; icon: ReactNode }[] = 
       <svg aria-hidden="true" viewBox="0 0 24 24">
         <path
           d="M4 12.5 12 5l8 7.5M7.5 10v8h9v-8"
+          fill="none"
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth="1.9"
+        />
+      </svg>
+    )
+  },
+  {
+    key: "session",
+    label: "Session",
+    icon: (
+      <svg aria-hidden="true" viewBox="0 0 24 24">
+        <path
+          d="M7 9a2 2 0 0 1 2-2h5l3 3v5a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V9Zm8 0v2h2"
           fill="none"
           stroke="currentColor"
           strokeLinecap="round"
@@ -74,6 +90,8 @@ const dashboardTabs: { key: DashboardView; label: string; icon: ReactNode }[] = 
     )
   }
 ];
+
+const mobileTabs = desktopTabs;
 
 function percent(value: number) {
   return `${Math.round(value * 100)}%`;
@@ -214,6 +232,40 @@ export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserU
     }
   }
 
+  function renderSessionPanel(className = "") {
+    return (
+      <section className={`panel session-panel ${className}`.trim()}>
+        <div className="session-copy">
+          <p className="eyebrow">Session</p>
+          <h2>{sessionActive ? "Session running" : "Start a scan"}</h2>
+          <p>{sessionMessage}</p>
+          <p className="session-note">Camera and microphone access requires HTTPS when deployed.</p>
+          {sessionError && <div className="form-error">{sessionError}</div>}
+          <div className="session-actions">
+            {!sessionActive ? (
+              <button className="primary-button" onClick={startBrowserSession} type="button">
+                Start session
+              </button>
+            ) : (
+              <>
+                <button className="primary-button" disabled={sessionBusy} onClick={scanAgain} type="button">
+                  {sessionBusy ? "Scanning..." : "Scan again"}
+                </button>
+                <button className="outline-button" onClick={stopBrowserSession} type="button">
+                  Stop session
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+        <div className="video-preview-wrap">
+          <video ref={videoRef} className="video-preview" muted playsInline />
+          {!sessionActive && <span>Camera preview</span>}
+        </div>
+      </section>
+    );
+  }
+
   return (
     <main className="dashboard-shell">
       <nav className="topbar">
@@ -244,8 +296,8 @@ export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserU
         </div>
       </section>
 
-      <section className="dashboard-tabs" aria-label="Dashboard sections">
-        {dashboardTabs.map((tab) => (
+      <section className="dashboard-tabs desktop-tabs" aria-label="Dashboard sections">
+        {desktopTabs.filter((tab) => tab.key !== "session").map((tab) => (
           <button
             key={tab.key}
             className={activeView === tab.key ? "active" : ""}
@@ -258,44 +310,22 @@ export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserU
         ))}
       </section>
 
-      <section className="panel session-panel">
-        <div className="session-copy">
-          <p className="eyebrow">Session</p>
-          <h2>{sessionActive ? "Session running" : "Start a scan"}</h2>
-          <p>{sessionMessage}</p>
-          <p className="session-note">Camera and microphone access requires HTTPS when deployed.</p>
-          {sessionError && <div className="form-error">{sessionError}</div>}
-          <div className="session-actions">
-            {!sessionActive ? (
-              <button className="primary-button" onClick={startBrowserSession} type="button">
-                Start session
-              </button>
-            ) : (
-              <>
-                <button className="primary-button" disabled={sessionBusy} onClick={scanAgain} type="button">
-                  {sessionBusy ? "Scanning..." : "Scan again"}
-                </button>
-                <button className="outline-button" onClick={stopBrowserSession} type="button">
-                  Stop session
-                </button>
-              </>
-            )}
-          </div>
-        </div>
-        <div className="video-preview-wrap">
-          <video ref={videoRef} className="video-preview" muted playsInline />
-          {!sessionActive && <span>Camera preview</span>}
-        </div>
-      </section>
+      {activeView === "overview" && renderSessionPanel("desktop-session-panel")}
 
-      <section className="metric-grid">
-        <MetricCard label="Total readings" value={data.total_results.toString()} caption="Captured sessions" />
-        <MetricCard label="Expression confidence" value={percent(data.average_face_confidence)} caption="Average confidence" />
-        <MetricCard label="Voice confidence" value={percent(data.average_voice_confidence)} caption="Average confidence" />
-        <MetricCard label="Primary level" value={mostCommonRisk} caption="Most frequent risk" />
-      </section>
+      {activeView === "overview" && (
+        <section className="metric-grid">
+          <MetricCard label="Total readings" value={data.total_results.toString()} caption="Captured sessions" />
+          <MetricCard label="Expression confidence" value={percent(data.average_face_confidence)} caption="Average confidence" />
+          <MetricCard label="Voice confidence" value={percent(data.average_voice_confidence)} caption="Average confidence" />
+          <MetricCard label="Primary level" value={mostCommonRisk} caption="Most frequent risk" />
+        </section>
+      )}
 
-      {activeView === "overview" ? (
+      {activeView === "session" ? (
+        <>
+          {renderSessionPanel("mobile-session-panel")}
+        </>
+      ) : activeView === "overview" ? (
         <>
           <section className="content-grid">
             <article className="panel">
@@ -543,6 +573,20 @@ export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserU
           </table>
         </div>
       </section>
+
+      <nav className="mobile-bottom-nav" aria-label="Mobile dashboard navigation">
+        {mobileTabs.map((tab) => (
+          <button
+            key={tab.key}
+            className={activeView === tab.key ? "active" : ""}
+            onClick={() => setActiveView(tab.key)}
+            type="button"
+          >
+            <span className="tab-icon">{tab.icon}</span>
+            <span className="tab-label">{tab.label}</span>
+          </button>
+        ))}
+      </nav>
     </main>
   );
 }
