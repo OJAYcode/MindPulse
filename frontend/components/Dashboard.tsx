@@ -97,6 +97,45 @@ function percent(value: number) {
   return `${Math.round(value * 100)}%`;
 }
 
+function titleCase(value: string) {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function emotionCopy(label: string) {
+  const key = label.toLowerCase();
+  const map: Record<string, string> = {
+    calm: "sounded calm",
+    stressed: "sounded tense",
+    neutral: "looked steady",
+    happy: "looked positive",
+    sad: "looked low",
+    angry: "looked tense"
+  };
+  return map[key] ?? label;
+}
+
+function stressCopy(level: StressLevel) {
+  if (level === "high") {
+    return {
+      title: "High stress",
+      summary: "This check-in suggests a strong stress response right now.",
+      guidance: "Take a short pause, slow your breathing, and check in again after a moment."
+    };
+  }
+  if (level === "medium") {
+    return {
+      title: "Moderate stress",
+      summary: "This check-in suggests some noticeable stress or tension.",
+      guidance: "A short break or a calmer environment may help before the next check-in."
+    };
+  }
+  return {
+    title: "Low stress",
+    summary: "This check-in suggests a calmer or more stable state.",
+    guidance: "You can keep going and scan again later if you want another update."
+  };
+}
+
 function emptySummary(): DashboardSummary {
   return {
     total_results: 0,
@@ -170,6 +209,8 @@ export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserU
   }, [historyResults, query, riskFilter]);
   const mostCommonRisk = (Object.entries(data.stress_distribution) as [StressLevel, number][])
     .sort((a, b) => b[1] - a[1])[0]?.[0] ?? "low";
+  const latestResult = data.latest_result;
+  const latestStressCopy = stressCopy(latestStress);
 
   async function captureAndAnalyze(stream: MediaStream) {
     if (!videoRef.current) {
@@ -287,12 +328,12 @@ export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserU
           <p className="eyebrow">Overview</p>
           <h1>Session summary</h1>
           <p>
-            Latest readings, confidence levels, and recent stress activity for this workspace.
+            A simple view of the latest check-in, recent stress pattern, and saved session history.
           </p>
         </div>
         <div className={`stress-orb ${stressTone[latestStress]}`}>
-          <span>{data.latest_result ? latestStress : "No data"}</span>
-          <small>{data.latest_result ? "current risk" : "current session"}</small>
+          <span>{data.latest_result ? latestStressCopy.title : "No data"}</span>
+          <small>{data.latest_result ? "latest check-in" : "current session"}</small>
         </div>
       </section>
 
@@ -324,6 +365,33 @@ export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserU
       {activeView === "session" ? (
         <>
           {renderSessionPanel("mobile-session-panel")}
+          <section className="panel result-panel">
+            <p className="eyebrow">Latest result</p>
+            {latestResult ? (
+              <>
+                <h2>{stressCopy(latestResult.stress_level).title}</h2>
+                <p>{stressCopy(latestResult.stress_level).summary}</p>
+                <div className="result-signal-grid">
+                  <div className="result-signal-card">
+                    <span>Face signal</span>
+                    <strong>{titleCase(latestResult.face_emotion)}</strong>
+                    <small>{emotionCopy(latestResult.face_emotion)} • {percent(latestResult.face_confidence)}</small>
+                  </div>
+                  <div className="result-signal-card">
+                    <span>Voice signal</span>
+                    <strong>{titleCase(latestResult.voice_emotion)}</strong>
+                    <small>{emotionCopy(latestResult.voice_emotion)} • {percent(latestResult.voice_confidence)}</small>
+                  </div>
+                </div>
+                <div className="result-guidance">
+                  <strong>What this means</strong>
+                  <p>{stressCopy(latestResult.stress_level).guidance}</p>
+                </div>
+              </>
+            ) : (
+              <p>No result yet. Start a scan to get a simple stress summary here.</p>
+            )}
+          </section>
         </>
       ) : activeView === "overview" ? (
         <>
@@ -354,16 +422,32 @@ export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserU
 
             <article className="panel latest-panel">
               <p className="eyebrow">Latest reading</p>
-              {data.latest_result ? (
+              {latestResult ? (
                 <>
-                  <h2>{data.latest_result.face_emotion} expression, {data.latest_result.voice_emotion} voice</h2>
+                  <h2>{stressCopy(latestResult.stress_level).title}</h2>
                   <p>
-                    Last captured through <strong>{formatSource(data.latest_result.source)}</strong> at{" "}
-                    {new Date(data.latest_result.timestamp).toLocaleString()}.
+                    {stressCopy(latestResult.stress_level).summary} The face signal {emotionCopy(latestResult.face_emotion)}
+                    {" "}and the voice signal {emotionCopy(latestResult.voice_emotion)}.
                   </p>
-                  <div className="confidence-pair">
-                    <span>Face {percent(data.latest_result.face_confidence)}</span>
-                    <span>Voice {percent(data.latest_result.voice_confidence)}</span>
+                  <div className="result-signal-grid compact-signals">
+                    <div className="result-signal-card">
+                      <span>Face signal</span>
+                      <strong>{titleCase(latestResult.face_emotion)}</strong>
+                      <small>{percent(latestResult.face_confidence)} confidence</small>
+                    </div>
+                    <div className="result-signal-card">
+                      <span>Voice signal</span>
+                      <strong>{titleCase(latestResult.voice_emotion)}</strong>
+                      <small>{percent(latestResult.voice_confidence)} confidence</small>
+                    </div>
+                  </div>
+                  <p className="result-meta">
+                    Saved via <strong>{formatSource(latestResult.source)}</strong> at{" "}
+                    {new Date(latestResult.timestamp).toLocaleString()}.
+                  </p>
+                  <div className="result-guidance inline-guidance">
+                    <strong>Helpful note</strong>
+                    <p>{stressCopy(latestResult.stress_level).guidance}</p>
                   </div>
                 </>
               ) : (
@@ -428,11 +512,14 @@ export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserU
                 <article className="history-card" key={result.id}>
                   <div>
                     <span className={`status-pill ${stressTone[result.stress_level]}`}>{result.stress_level}</span>
-                    <h3>{result.face_emotion} expression, {result.voice_emotion} voice</h3>
-                    <p>{new Date(result.timestamp).toLocaleString()} - {formatSource(result.source)}</p>
+                    <h3>{stressCopy(result.stress_level).title}</h3>
+                    <p>
+                      Face signal {emotionCopy(result.face_emotion)} and voice signal {emotionCopy(result.voice_emotion)}.
+                    </p>
+                    <p>{new Date(result.timestamp).toLocaleString()} • {formatSource(result.source)}</p>
                   </div>
                   <div className="history-confidence">
-                    <span>Expression {percent(result.face_confidence)}</span>
+                    <span>Face {percent(result.face_confidence)}</span>
                     <span>Voice {percent(result.voice_confidence)}</span>
                   </div>
                 </article>

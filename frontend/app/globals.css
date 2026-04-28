@@ -645,6 +645,79 @@ input:focus {
   font-weight: 900;
 }
 
+.result-panel {
+  margin: 18px 0;
+}
+
+.result-signal-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 18px 0 0;
+}
+
+.result-signal-card {
+  border: 1px solid rgba(227, 217, 202, 0.8);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.44);
+  padding: 14px;
+}
+
+.result-signal-card span,
+.result-signal-card small,
+.result-meta {
+  color: var(--muted);
+}
+
+.result-signal-card span {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.result-signal-card strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 1.05rem;
+  letter-spacing: -0.02em;
+}
+
+.result-signal-card small {
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.result-guidance {
+  margin-top: 16px;
+  border-radius: 18px;
+  background: #f2eadc;
+  padding: 14px 15px;
+}
+
+.result-guidance strong {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 0.82rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.result-guidance p,
+.result-meta {
+  margin: 0;
+}
+
+.inline-guidance {
+  margin-top: 14px;
+}
+
+.compact-signals {
+  margin-top: 14px;
+}
+
 .profile-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -900,6 +973,10 @@ th {
   .history-confidence {
     min-width: 0;
     width: 100%;
+  }
+
+  .result-signal-grid {
+    grid-template-columns: 1fr;
   }
 
   .profile-grid {
