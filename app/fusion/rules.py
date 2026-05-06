@@ -28,7 +28,9 @@ def _expected_stress(probabilities: dict[str, float], mapping: dict[str, float])
         total += float(probability) * float(mapping.get(label.lower(), 0.5))
     top_label, top_probability = max(probabilities.items(), key=lambda item: float(item[1]))
     dominant_score = float(mapping.get(top_label.lower(), 0.5))
-    confidence_adjusted = total + 0.35 * float(top_probability) * (dominant_score - total)
+    confidence_adjusted = total + 0.12 * float(top_probability) * (dominant_score - total)
+    if float(top_probability) < 0.5:
+        confidence_adjusted = 0.7 * confidence_adjusted + 0.3 * 0.4
     return float(np.clip(confidence_adjusted, 0.0, 1.0))
 
 

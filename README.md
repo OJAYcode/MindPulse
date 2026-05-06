@@ -221,26 +221,43 @@ curl http://127.0.0.1:8000/health
 ### Face model
 
 ```bash
-python scripts/train_face.py --epochs 5 --batch-size 32 --max-files-per-class 750 --fine-tune-epochs 4 --fine-tune-layers 60
+python scripts/train_face.py --epochs 10 --batch-size 32 --max-files-per-class 3000 --fine-tune-epochs 8 --fine-tune-layers 80
 ```
 
 Evaluate face model:
 
 ```bash
-python scripts/evaluate_face.py --max-files-per-class 750
+python scripts/evaluate_face.py --max-files-per-class 3000
 ```
 
 ### Voice model
 
+By default, the voice branch now trains a simpler stress-tendency classifier:
+
+- `calm`
+- `neutral`
+- `stressed`
+
+This is more reliable for this project than trying to separate many detailed voice emotions.
+
 ```bash
-python scripts/train_voice.py --epochs 5 --batch-size 16 --max-files-per-class 192
+python scripts/train_voice.py --epochs 30 --batch-size 16 --max-files-per-class 1000 --label-mode stress
 ```
 
 Evaluate voice model:
 
 ```bash
-python scripts/evaluate_voice.py --max-files-per-class 192
+python scripts/evaluate_voice.py --max-files-per-class 1000 --label-mode stress
 ```
+
+### Current local results
+
+These are the latest local evaluation results after retraining. They are useful for a final year project report, but they should not be described as medical-grade accuracy.
+
+| Branch | Labels | Accuracy | Precision | Recall | F1 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Face | angry, happy, neutral, sad | 61.2% | 62.5% | 61.2% | 60.4% |
+| Voice | calm, neutral, stressed | 43.8% | 48.0% | 43.8% | 41.5% |
 
 ### Fusion
 

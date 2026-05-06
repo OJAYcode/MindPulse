@@ -51,17 +51,71 @@ def _get_voice_runtime() -> VoiceRuntime:
     return _VOICE_RUNTIME
 
 
-def _predict_face_from_bytes(image_bytes: bytes):
+def _decode_frame(image_bytes: bytes) -> np.ndarray:
     frame_array = np.frombuffer(image_bytes, dtype=np.uint8)
     frame = cv2.imdecode(frame_array, cv2.IMREAD_COLOR)
     if frame is None:
         raise ValueError("Could not decode uploaded webcam image.")
+    return frame
+
+
+def _predict_face_from_bytes(image_bytes: bytes):
+    frame = _decode_frame(image_bytes)
     face_runtime = _get_face_runtime()
     face_crop = face_runtime.detect_and_crop(frame)
     if face_crop is None:
-        face_crop = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        face_crop = cv2.resize(face_crop, (224, 224)).astype("float32")
+        raise ValueError("No clear face was detected in the uploaded webcam image.")
     return face_runtime.predict_from_face(face_crop)
+
+
+def _average_face_predictions(image_samples: list[bytes]):
+    face_runtime = _get_face_runtime()
+    valid_predictions = []
+    for image_bytes in image_samples:
+        try:
+            frame = _decode_frame(image_bytes)
+        except ValueError:
+            continue
+        face_crop = face_runtime.detect_and_crop(frame)
+        if face_crop is None:
+            continue
+        valid_predictions.append(face_runtime.predict_from_face(face_crop))
+
+    if not valid_predictions:
+        raise ValueError("No clear face was detected. Please face the camera with steady lighting and try again.")
+
+    labels = face_runtime.labels
+    averaged = {
+        label: float(np.mean([prediction.probabilities.get(label, 0.0) for prediction in valid_predictions]))
+        for label in labels
+    }
+    stabilized = _stabilize_face_probabilities(averaged)
+    label = max(stabilized, key=stabilized.get)
+    return type(valid_predictions[0])(
+        label=label,
+        confidence=float(stabilized[label]),
+        probabilities=stabilized,
+    )
+
+
+def _stabilize_face_probabilities(probabilities: dict[str, float]) -> dict[str, float]:
+    """Reduce single-class spikes from noisy webcam frames before fusion."""
+    if not probabilities:
+        return probabilities
+    sorted_probs = sorted(probabilities.items(), key=lambda item: item[1], reverse=True)
+    top_label, top_confidence = sorted_probs[0]
+    runner_up = sorted_probs[1][1] if len(sorted_probs) > 1 else 0.0
+    margin = top_confidence - runner_up
+
+    if top_label.lower() == "angry" and (top_confidence < 0.62 or margin < 0.18):
+        probabilities = probabilities.copy()
+        shift = min(probabilities[top_label] * 0.35, 0.18)
+        probabilities[top_label] -= shift
+        fallback_label = "neutral" if "neutral" in probabilities else sorted_probs[1][0]
+        probabilities[fallback_label] += shift
+
+    total = sum(probabilities.values()) or 1.0
+    return {label: float(value / total) for label, value in probabilities.items()}
 
 
 def _predict_voice_from_bytes(audio_bytes: bytes, suffix: str):
@@ -79,9 +133,10 @@ def analyze_uploaded_sample(
     image_bytes: bytes,
     audio_bytes: bytes,
     audio_filename: str,
+    image_samples: list[bytes] | None = None,
 ) -> UploadedInferenceResult:
     settings = get_settings()
-    face_prediction = _predict_face_from_bytes(image_bytes)
+    face_prediction = _average_face_predictions(image_samples or [image_bytes])
     suffix = Path(audio_filename).suffix or ".webm"
     voice_prediction = _predict_voice_from_bytes(audio_bytes, suffix=suffix)
     rule_config = load_fusion_rule_config(settings.fusion_rules_path)

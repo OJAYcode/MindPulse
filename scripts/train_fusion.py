@@ -65,7 +65,8 @@ def train_fusion_model(
     demo_mode: bool = False,
     max_pairs: int = 1500,
     face_max_files_per_class: int | None = 750,
-    voice_max_files_per_class: int | None = 192,
+    voice_max_files_per_class: int | None = 1000,
+    voice_label_mode: str = "stress",
 ) -> dict:
     settings = get_settings()
     face_labels = read_json(settings.face_labels_path, default=[])
@@ -84,6 +85,7 @@ def train_fusion_model(
         sample_rate=settings.audio_sample_rate,
         demo_mode=demo_mode,
         max_files_per_class=voice_max_files_per_class,
+        label_mode=voice_label_mode,
     )
     face_model = load_face_model(settings.face_model_path, face_dataset.input_shape, len(face_labels))
     voice_model = load_voice_model(settings.voice_model_path, input_shape=(64, 184, 1), num_classes=len(voice_labels))
@@ -112,6 +114,7 @@ def train_fusion_model(
         "target_distribution": {label: int(target_distribution.get(label, 0)) for label in STRESS_LABELS},
         "face_max_files_per_class": face_max_files_per_class,
         "voice_max_files_per_class": voice_max_files_per_class,
+        "voice_label_mode": voice_label_mode,
     }
     write_json(settings.fusion_model_path.with_suffix(".json"), metadata)
     LOGGER.info("Saved learned fusion model to %s", settings.fusion_model_path)
@@ -123,7 +126,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--demo", action="store_true", help="Use synthetic branch datasets.")
     parser.add_argument("--max-pairs", type=int, default=1500, help="Maximum paired branch predictions to use.")
     parser.add_argument("--face-max-files-per-class", type=int, default=750)
-    parser.add_argument("--voice-max-files-per-class", type=int, default=192)
+    parser.add_argument("--voice-max-files-per-class", type=int, default=1000)
+    parser.add_argument("--voice-label-mode", choices=["emotion", "stress"], default="stress")
     return parser.parse_args()
 
 
@@ -136,4 +140,5 @@ if __name__ == "__main__":
         max_pairs=args.max_pairs,
         face_max_files_per_class=face_cap,
         voice_max_files_per_class=voice_cap,
+        voice_label_mode=args.voice_label_mode,
     )

@@ -3,8 +3,8 @@
 import type { ReactNode } from "react";
 import { useMemo, useRef, useState } from "react";
 import { analyzeSample, changePassword, updateProfile } from "../lib/api";
-import { captureVideoFrame, recordAudioSample } from "../lib/capture";
-import type { DashboardSummary, StressLevel, User } from "../lib/types";
+import { captureVideoFrames, delay, recordAudioSample, waitForVideoReady } from "../lib/capture";
+import type { DashboardSummary, InferenceResult, StressLevel, User } from "../lib/types";
 
 type DashboardProps = {
   user: User;
@@ -92,6 +92,11 @@ const desktopTabs: { key: DashboardView; label: string; icon: ReactNode }[] = [
 ];
 
 const mobileTabs = desktopTabs;
+const SCAN_READY_DELAY_MS = 900;
+const SCAN_RECORDING_MS = 5500;
+const SCAN_FRAME_COUNT = 5;
+const SCAN_FRAME_INTERVAL_MS = 850;
+const SCAN_TOTAL_MS = SCAN_READY_DELAY_MS + SCAN_RECORDING_MS;
 
 function percent(value: number) {
   return `${Math.round(value * 100)}%`;
@@ -117,23 +122,71 @@ function emotionCopy(label: string) {
 function stressCopy(level: StressLevel) {
   if (level === "high") {
     return {
-      title: "High stress",
-      summary: "This check-in suggests a strong stress response right now.",
-      guidance: "Take a short pause, slow your breathing, and check in again after a moment."
+      title: "Needs a pause",
+      badge: "High",
+      summary: "This check-in suggests you may be feeling quite strained right now.",
+      guidance: "Take a short pause, slow your breathing, and check in again after a moment.",
+      feeling: "You may be under quite a bit of pressure right now.",
+      nextStepTitle: "Best next step"
     };
   }
   if (level === "medium") {
     return {
-      title: "Moderate stress",
-      summary: "This check-in suggests some noticeable stress or tension.",
-      guidance: "A short break or a calmer environment may help before the next check-in."
+      title: "A bit tense",
+      badge: "Medium",
+      summary: "This check-in suggests some tension or pressure at the moment.",
+      guidance: "A short break or a calmer environment may help before the next check-in.",
+      feeling: "There are some signs of tension, but not an extreme level.",
+      nextStepTitle: "Helpful next step"
     };
   }
   return {
-    title: "Low stress",
+    title: "Steady",
+    badge: "Low",
     summary: "This check-in suggests a calmer or more stable state.",
-    guidance: "You can keep going and scan again later if you want another update."
+    guidance: "You can keep going and scan again later if you want another update.",
+    feeling: "You seem fairly steady at the moment.",
+    nextStepTitle: "What to do next"
   };
+}
+
+function resultHeadline(result: DashboardSummary["latest_result"]) {
+  if (!result) {
+    return "Ready for your first check-in";
+  }
+  if (result.stress_level === "high") {
+    return "You may need a short pause";
+  }
+  if (result.stress_level === "medium") {
+    return "You seem a bit tense right now";
+  }
+  return "You seem fairly steady right now";
+}
+
+function faceObservation(label: string) {
+  const key = label.toLowerCase();
+  const map: Record<string, string> = {
+    calm: "Your face looked calm and settled.",
+    neutral: "Your face looked fairly steady.",
+    happy: "Your face showed some positive energy.",
+    sad: "Your face showed signs of low mood or tiredness.",
+    angry: "Your face showed visible tension.",
+    stressed: "Your face showed visible stress."
+  };
+  return map[key] ?? `Your face signal was read as ${label}.`;
+}
+
+function voiceObservation(label: string) {
+  const key = label.toLowerCase();
+  const map: Record<string, string> = {
+    calm: "Your voice sounded calm.",
+    neutral: "Your voice sounded steady.",
+    happy: "Your voice sounded more upbeat.",
+    sad: "Your voice sounded low or subdued.",
+    angry: "Your voice sounded tense.",
+    stressed: "Your voice sounded tense or pressured."
+  };
+  return map[key] ?? `Your voice signal was read as ${label}.`;
 }
 
 function emptySummary(): DashboardSummary {
@@ -182,7 +235,6 @@ export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserU
   const rawData = summary ?? emptySummary();
   const data = visibleSummary(rawData, user.id);
   const historyResults = rawData.recent_results;
-  const latestStress = data.latest_result?.stress_level ?? "low";
   const distributionTotal = Math.max(data.total_results, 1);
   const [activeView, setActiveView] = useState<DashboardView>("overview");
   const [riskFilter, setRiskFilter] = useState<"all" | StressLevel>("all");
@@ -198,8 +250,11 @@ export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserU
   const [sessionBusy, setSessionBusy] = useState(false);
   const [sessionMessage, setSessionMessage] = useState("Camera and microphone are ready when you start a session.");
   const [sessionError, setSessionError] = useState<string | null>(null);
+  const [currentScanResult, setCurrentScanResult] = useState<InferenceResult | null>(null);
+  const [scanStartedAt, setScanStartedAt] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const scanRunRef = useRef(0);
   const filteredResults = useMemo(() => {
     return historyResults.filter((result) => {
       const matchesRisk = riskFilter === "all" || result.stress_level === riskFilter;
@@ -209,25 +264,42 @@ export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserU
   }, [historyResults, query, riskFilter]);
   const mostCommonRisk = (Object.entries(data.stress_distribution) as [StressLevel, number][])
     .sort((a, b) => b[1] - a[1])[0]?.[0] ?? "low";
-  const latestResult = data.latest_result;
+  const latestResult = currentScanResult ?? data.latest_result;
+  const latestStress = latestResult?.stress_level ?? "low";
   const latestStressCopy = stressCopy(latestStress);
 
   async function captureAndAnalyze(stream: MediaStream) {
     if (!videoRef.current) {
       throw new Error("Camera preview is not ready yet.");
     }
+    const scanRunId = scanRunRef.current + 1;
+    scanRunRef.current = scanRunId;
+    setCurrentScanResult(null);
+    setScanStartedAt(new Date().toISOString());
     setSessionBusy(true);
-    setSessionMessage("Capturing a short sample...");
+    setSessionMessage("Get ready. Keep your face visible and speak naturally.");
     try {
-      const audioPromise = recordAudioSample(stream, 3000);
-      const faceImage = await captureVideoFrame(videoRef.current);
+      await waitForVideoReady(videoRef.current);
+      if (scanRunRef.current !== scanRunId) return;
+      await delay(SCAN_READY_DELAY_MS);
+      if (scanRunRef.current !== scanRunId) return;
+      setSessionMessage("Recording a short sample. Please keep speaking until it finishes.");
+      const audioPromise = recordAudioSample(stream, SCAN_RECORDING_MS);
+      const faceImages = await captureVideoFrames(videoRef.current, SCAN_FRAME_COUNT, SCAN_FRAME_INTERVAL_MS);
+      await delay(Math.max(SCAN_RECORDING_MS - SCAN_FRAME_COUNT * SCAN_FRAME_INTERVAL_MS, 0));
+      if (scanRunRef.current !== scanRunId) return;
       const audioFile = await audioPromise;
+      if (scanRunRef.current !== scanRunId) return;
       setSessionMessage("Analyzing sample...");
-      await analyzeSample(token, { faceImage, audioFile });
+      const result = await analyzeSample(token, { faceImages, audioFile });
+      if (scanRunRef.current !== scanRunId) return;
+      setCurrentScanResult(result);
       await onRefresh();
-      setSessionMessage("Reading saved. You can scan again or stop the session.");
+      setSessionMessage("New reading saved. You can scan again or stop the session.");
     } finally {
-      setSessionBusy(false);
+      if (scanRunRef.current === scanRunId) {
+        setSessionBusy(false);
+      }
     }
   }
 
@@ -242,6 +314,7 @@ export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserU
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
+        await waitForVideoReady(videoRef.current);
       }
       setSessionActive(true);
       setSessionMessage("Session started. Keep your face visible and speak naturally.");
@@ -253,6 +326,7 @@ export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserU
   }
 
   function stopBrowserSession() {
+    scanRunRef.current += 1;
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
     if (videoRef.current) {
@@ -284,7 +358,7 @@ export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserU
           {sessionError && <div className="form-error">{sessionError}</div>}
           <div className="session-actions">
             {!sessionActive ? (
-              <button className="primary-button" onClick={startBrowserSession} type="button">
+              <button className="primary-button" disabled={sessionBusy} onClick={startBrowserSession} type="button">
                 Start session
               </button>
             ) : (
@@ -308,32 +382,54 @@ export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserU
   }
 
   return (
-    <main className="dashboard-shell">
+    <main className={`dashboard-shell dashboard-view-${activeView}`}>
       <nav className="topbar">
-        <div>
-          <span className="brand-mark">M</span>
-          <span className="brand-text">MindPulse</span>
+        <div className="topbar-brand">
+          <div>
+            <span className="brand-mark">M</span>
+            <span className="brand-text">MindPulse</span>
+          </div>
+          <span className="welcome-text">Welcome, {user.username}</span>
         </div>
-        <span className="welcome-text">Welcome, {user.username}</span>
         <div className="topbar-actions">
           <button className="ghost-button" disabled={refreshing} onClick={onRefresh}>
             {refreshing ? "Refreshing..." : "Refresh"}
           </button>
           <button className="outline-button" onClick={onLogout}>Logout</button>
         </div>
+        <button
+          aria-label="Refresh dashboard"
+          className="mobile-refresh-button"
+          disabled={refreshing}
+          onClick={onRefresh}
+          type="button"
+        >
+          <svg aria-hidden="true" viewBox="0 0 24 24">
+            <path
+              d="M20 4v5h-5M4 20v-5h5M6.6 9.2A7 7 0 0 1 18 6.5L20 9M4 15l2-2.5A7 7 0 0 0 17.4 14.8"
+              fill="none"
+              stroke="currentColor"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="1.9"
+            />
+          </svg>
+        </button>
       </nav>
 
       <section className="dashboard-hero-card">
         <div>
           <p className="eyebrow">Overview</p>
-          <h1>Session summary</h1>
+          <h1>{resultHeadline(latestResult)}</h1>
           <p>
-            A simple view of the latest check-in, recent stress pattern, and saved session history.
+            {latestResult
+              ? latestStressCopy.feeling
+              : "MindPulse is ready to read a short face and voice sample when you begin."}
           </p>
         </div>
         <div className={`stress-orb ${stressTone[latestStress]}`}>
-          <span>{data.latest_result ? latestStressCopy.title : "No data"}</span>
-          <small>{data.latest_result ? "latest check-in" : "current session"}</small>
+          <span>{data.latest_result ? latestStressCopy.badge : "Ready"}</span>
+          <small>{data.latest_result ? "current state" : "waiting to scan"}</small>
         </div>
       </section>
 
@@ -353,21 +449,23 @@ export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserU
 
       {activeView === "overview" && renderSessionPanel("desktop-session-panel")}
 
-      {activeView === "overview" && (
-        <section className="metric-grid">
-          <MetricCard label="Total readings" value={data.total_results.toString()} caption="Captured sessions" />
-          <MetricCard label="Expression confidence" value={percent(data.average_face_confidence)} caption="Average confidence" />
-          <MetricCard label="Voice confidence" value={percent(data.average_voice_confidence)} caption="Average confidence" />
-          <MetricCard label="Primary level" value={mostCommonRisk} caption="Most frequent risk" />
-        </section>
-      )}
-
       {activeView === "session" ? (
         <>
           {renderSessionPanel("mobile-session-panel")}
           <section className="panel result-panel">
-            <p className="eyebrow">Latest result</p>
-            {latestResult ? (
+            <p className="eyebrow">{sessionBusy ? "Current scan" : "Latest result"}</p>
+            {sessionBusy ? (
+              <div className="scan-progress-card">
+                <span className="pulse-dot" />
+                <div>
+                  <h2>Scanning new sample</h2>
+                  <p>
+                    This is a fresh {Math.round(SCAN_TOTAL_MS / 1000)} second scan. The previous result is hidden until this one finishes.
+                  </p>
+                  {scanStartedAt && <small>Started at {new Date(scanStartedAt).toLocaleTimeString()}</small>}
+                </div>
+              </div>
+            ) : latestResult ? (
               <>
                 <h2>{stressCopy(latestResult.stress_level).title}</h2>
                 <p>{stressCopy(latestResult.stress_level).summary}</p>
@@ -389,89 +487,83 @@ export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserU
                 </div>
               </>
             ) : (
-              <p>No result yet. Start a scan to get a simple stress summary here.</p>
+              <p>Your first reading will appear here after a short camera and microphone scan.</p>
             )}
           </section>
         </>
       ) : activeView === "overview" ? (
         <>
-          <section className="content-grid">
-            <article className="panel">
-              <div className="panel-header">
-                <div>
-                  <p className="eyebrow">Distribution</p>
-                  <h2>Risk level balance</h2>
-                </div>
-              </div>
-              {(["low", "medium", "high"] as StressLevel[]).map((level) => {
-                const count = data.stress_distribution[level];
-                const width = Math.max((count / distributionTotal) * 100, count > 0 ? 8 : 0);
-                return (
-                  <div className="distribution-row" key={level}>
-                    <div>
-                      <span className={`status-pill ${stressTone[level]}`}>{level}</span>
-                      <strong>{count}</strong>
-                    </div>
-                    <div className="bar-track">
-                      <span className={`bar-fill ${stressTone[level]}`} style={{ width: `${width}%` }} />
-                    </div>
-                  </div>
-                );
-              })}
-            </article>
-
-            <article className="panel latest-panel">
-              <p className="eyebrow">Latest reading</p>
+          <section className="content-grid result-story-grid">
+            <article className="panel story-panel">
+              <p className="eyebrow">What this means</p>
               {latestResult ? (
                 <>
                   <h2>{stressCopy(latestResult.stress_level).title}</h2>
-                  <p>
-                    {stressCopy(latestResult.stress_level).summary} The face signal {emotionCopy(latestResult.face_emotion)}
-                    {" "}and the voice signal {emotionCopy(latestResult.voice_emotion)}.
-                  </p>
-                  <div className="result-signal-grid compact-signals">
-                    <div className="result-signal-card">
-                      <span>Face signal</span>
-                      <strong>{titleCase(latestResult.face_emotion)}</strong>
-                      <small>{percent(latestResult.face_confidence)} confidence</small>
-                    </div>
-                    <div className="result-signal-card">
-                      <span>Voice signal</span>
-                      <strong>{titleCase(latestResult.voice_emotion)}</strong>
-                      <small>{percent(latestResult.voice_confidence)} confidence</small>
-                    </div>
-                  </div>
-                  <p className="result-meta">
-                    Saved via <strong>{formatSource(latestResult.source)}</strong> at{" "}
-                    {new Date(latestResult.timestamp).toLocaleString()}.
-                  </p>
-                  <div className="result-guidance inline-guidance">
-                    <strong>Helpful note</strong>
+                  <p>{stressCopy(latestResult.stress_level).summary}</p>
+                  <div className="story-note">
+                    <strong>{stressCopy(latestResult.stress_level).nextStepTitle}</strong>
                     <p>{stressCopy(latestResult.stress_level).guidance}</p>
                   </div>
                 </>
               ) : (
-                <p>No readings yet. Start a capture session to populate your workspace.</p>
+                <>
+                  <h2>Your first reading starts here</h2>
+                  <p>Once you complete a scan, this section will describe your current state in plain language.</p>
+                </>
               )}
             </article>
-          </section>
 
-          <section className="panel trend-panel">
-            <div className="panel-header">
-              <div>
-                <p className="eyebrow">Trend</p>
-                <h2>Recent risk timeline</h2>
-              </div>
-            </div>
-            <div className="timeline-strip">
-              {data.recent_results.slice(0, 12).reverse().map((result) => (
-                <div className="timeline-item" key={result.id}>
-                  <span className={`timeline-dot ${stressTone[result.stress_level]}`} />
-                  <small>{new Date(result.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small>
-                </div>
-              ))}
-              {data.recent_results.length === 0 && <p>No timeline data yet.</p>}
-            </div>
+            <article className="panel story-panel">
+              <p className="eyebrow">What we noticed</p>
+              {latestResult ? (
+                <>
+                  <h2>Face and voice signals</h2>
+                  <div className="story-list">
+                    <div className="story-item">
+                      <strong>Face</strong>
+                      <p>{faceObservation(latestResult.face_emotion)}</p>
+                    </div>
+                    <div className="story-item">
+                      <strong>Voice</strong>
+                      <p>{voiceObservation(latestResult.voice_emotion)}</p>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <h2>Signals will appear after scanning</h2>
+                  <p>The app will summarize the face and voice cues it used, so the result is easier to understand.</p>
+                </>
+              )}
+            </article>
+
+            <article className="panel story-panel">
+              <p className="eyebrow">Quick overview</p>
+              {latestResult ? (
+                <>
+                  <h2>Latest check-in details</h2>
+                  <div className="story-list compact-story-list">
+                    <div className="story-item">
+                      <strong>Stress level</strong>
+                      <p>{stressCopy(latestResult.stress_level).title}</p>
+                    </div>
+                    <div className="story-item">
+                      <strong>Session count</strong>
+                      <p>{data.total_results} saved {data.total_results === 1 ? "check-in" : "check-ins"} so far.</p>
+                    </div>
+                    <div className="story-item">
+                      <strong>Saved at</strong>
+                      <p>{new Date(latestResult.timestamp).toLocaleString()}</p>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <h2>Your timeline is ready</h2>
+                  <p>Completed scans will be saved here with the time, level, and source of each reading.</p>
+                </>
+              )}
+            </article>
           </section>
         </>
       ) : activeView === "history" ? (
@@ -504,8 +596,8 @@ export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserU
           <div className="history-list">
             {filteredResults.length === 0 ? (
               <div className="empty-state">
-                <h3>No matching readings</h3>
-                <p>Try changing the search term or risk filter.</p>
+                <h3>Nothing matches this filter</h3>
+                <p>Adjust the search or level filter to bring readings back into view.</p>
               </div>
             ) : (
               filteredResults.map((result) => (
@@ -618,6 +710,15 @@ export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserU
               </label>
               <button className="primary-button" type="submit">Update password</button>
             </form>
+
+            <div className="profile-logout-block">
+              <p className="eyebrow">Session</p>
+              <h2>Log out</h2>
+              <p>Sign out of your workspace on this device when you are done.</p>
+              <button className="outline-button profile-logout-button" onClick={onLogout} type="button">
+                Logout
+              </button>
+            </div>
           </article>
         </section>
       )}
@@ -643,7 +744,7 @@ export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserU
             <tbody>
               {historyResults.length === 0 ? (
                 <tr>
-                  <td colSpan={5}>No results yet.</td>
+                  <td colSpan={5}>Your recent readings will appear here after your first scan.</td>
                 </tr>
               ) : (
                 historyResults.map((result) => (

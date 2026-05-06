@@ -77,10 +77,13 @@ export function changePassword(
 
 export async function analyzeSample(
   token: string,
-  payload: { faceImage: Blob; audioFile: Blob }
+  payload: { faceImage?: Blob; faceImages?: Blob[]; audioFile: Blob }
 ) {
   const formData = new FormData();
-  formData.append("face_image", payload.faceImage, "frame.jpg");
+  const faceImages = payload.faceImages?.length ? payload.faceImages : payload.faceImage ? [payload.faceImage] : [];
+  faceImages.forEach((faceImage, index) => {
+    formData.append("face_images", faceImage, `frame-${index + 1}.jpg`);
+  });
   formData.append("audio_file", payload.audioFile, "audio.wav");
   const response = await fetch(`${API_BASE_URL}/sessions/analyze-sample`, {
     method: "POST",

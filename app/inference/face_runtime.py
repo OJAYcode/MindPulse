@@ -22,13 +22,29 @@ class FaceRuntime:
     def __init__(self, model_path: Path, labels_path: Path) -> None:
         self.labels = read_json(labels_path, default=[])
         self.model = load_face_model(model_path, (224, 224, 3), len(self.labels))
-        self.detector = mp.solutions.face_detection.FaceDetection(model_selection=0, min_detection_confidence=0.5)
+        self.detector = self._create_detector()
+        self.haar_detector = self._create_haar_detector()
+
+    def _create_detector(self):
+        solutions = getattr(mp, "solutions", None)
+        if solutions is None or not hasattr(solutions, "face_detection"):
+            return None
+        return solutions.face_detection.FaceDetection(model_selection=0, min_detection_confidence=0.5)
+
+    def _create_haar_detector(self):
+        cascade_path = Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml"
+        detector = cv2.CascadeClassifier(str(cascade_path))
+        return detector if not detector.empty() else None
 
     def detect_and_crop(self, frame: np.ndarray, target_size: tuple[int, int] = (224, 224)) -> np.ndarray | None:
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+        if self.detector is None:
+            return self._detect_and_crop_with_haar(frame, rgb_frame, target_size)
+
         result = self.detector.process(rgb_frame)
         if not result.detections:
-            return None
+            return self._detect_and_crop_with_haar(frame, rgb_frame, target_size)
 
         bbox = result.detections[0].location_data.relative_bounding_box
         height, width, _ = frame.shape
@@ -41,6 +57,36 @@ class FaceRuntime:
             return None
         face = cv2.resize(face, target_size).astype("float32")
         return face
+
+    def _detect_and_crop_with_haar(
+        self,
+        frame: np.ndarray,
+        rgb_frame: np.ndarray,
+        target_size: tuple[int, int],
+    ) -> np.ndarray | None:
+        if self.haar_detector is None:
+            return None
+
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        detections = self.haar_detector.detectMultiScale(
+            gray,
+            scaleFactor=1.1,
+            minNeighbors=5,
+            minSize=(72, 72),
+        )
+        if len(detections) == 0:
+            return None
+
+        x, y, width, height = max(detections, key=lambda item: item[2] * item[3])
+        padding = int(max(width, height) * 0.18)
+        x1 = max(x - padding, 0)
+        y1 = max(y - padding, 0)
+        x2 = min(x + width + padding, rgb_frame.shape[1])
+        y2 = min(y + height + padding, rgb_frame.shape[0])
+        face = rgb_frame[y1:y2, x1:x2]
+        if face.size == 0:
+            return None
+        return cv2.resize(face, target_size).astype("float32")
 
     def predict_from_face(self, face_image: np.ndarray) -> FacePrediction:
         batch = np.expand_dims(face_image, axis=0)

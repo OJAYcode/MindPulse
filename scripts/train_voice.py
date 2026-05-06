@@ -13,8 +13,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-files-per-class",
         type=int,
-        default=120,
+        default=1000,
         help="Optional cap per class for faster balanced training. Use 0 or omit for all files.",
+    )
+    parser.add_argument(
+        "--label-mode",
+        choices=["emotion", "stress"],
+        default="stress",
+        help="Use original emotion folders or collapse them into calm/neutral/stressed labels.",
     )
     return parser.parse_args()
 
@@ -27,4 +33,5 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         demo_mode=args.demo,
         max_files_per_class=max_files,
+        label_mode=args.label_mode,
     )

@@ -15,7 +15,21 @@ from app.utils.logging import get_logger
 
 
 LOGGER = get_logger(__name__)
-AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".ogg"}
+AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".ogg", ".m4a"}
+VOICE_SAMPLE_SEED = 42
+VOICE_CACHE_VERSION = "v2"
+VOICE_STRESS_MAPPING = {
+    "angry": "stressed",
+    "calm": "calm",
+    "fear": "stressed",
+    "fearful": "stressed",
+    "happy": "calm",
+    "neutral": "neutral",
+    "sad": "stressed",
+    "stress": "stressed",
+    "stressed": "stressed",
+}
+STRESS_LABEL_ORDER = ["calm", "neutral", "stressed"]
 
 
 @dataclass(slots=True)
@@ -126,10 +140,16 @@ def load_voice_dataset(
     sample_rate: int = 16000,
     demo_mode: bool = False,
     max_files_per_class: int | None = None,
+    label_mode: str = "emotion",
 ) -> VoiceDataset:
     settings = get_settings()
     cache_suffix = f"_{max_files_per_class}" if max_files_per_class is not None else ""
-    cache_path = settings.voice_processed_dir / f"voice_dataset_cache{cache_suffix}.npz"
+    normalized_label_mode = label_mode.lower().strip()
+    if normalized_label_mode not in {"emotion", "stress"}:
+        raise ValueError("label_mode must be either 'emotion' or 'stress'.")
+    cache_path = settings.voice_processed_dir / (
+        f"voice_dataset_cache_{VOICE_CACHE_VERSION}_{normalized_label_mode}{cache_suffix}.npz"
+    )
     if demo_mode or not data_dir.exists() or not any(data_dir.iterdir()):
         LOGGER.warning("Voice dataset missing or demo mode enabled. Using synthetic voice dataset.")
         dataset = _synthetic_voice_dataset(sample_rate=sample_rate)
@@ -139,7 +159,12 @@ def load_voice_dataset(
         )
         return dataset
 
-    labels = sorted([item.name for item in data_dir.iterdir() if item.is_dir()])
+    source_labels = sorted([item.name for item in data_dir.iterdir() if item.is_dir()])
+    if normalized_label_mode == "stress":
+        labels = [label for label in STRESS_LABEL_ORDER if any(VOICE_STRESS_MAPPING.get(source.lower()) == label for source in source_labels)]
+    else:
+        labels = source_labels
+    label_to_index = {label: index for index, label in enumerate(labels)}
 
     if cache_path.exists():
         LOGGER.info("Loading cached voice dataset from %s", cache_path)
@@ -154,21 +179,31 @@ def load_voice_dataset(
 
     features: list[np.ndarray] = []
     targets: list[int] = []
-    for label_index, label in enumerate(labels):
+    grouped_files: dict[str, list[Path]] = {label: [] for label in labels}
+    for source_index, source_label in enumerate(source_labels):
+        target_label = VOICE_STRESS_MAPPING.get(source_label.lower(), source_label) if normalized_label_mode == "stress" else source_label
+        if target_label not in grouped_files:
+            LOGGER.warning("Skipping voice folder '%s' because it does not map to a supported label.", source_label)
+            continue
         label_files = [
             file_path
-            for file_path in (data_dir / label).rglob("*")
+            for file_path in (data_dir / source_label).rglob("*")
             if file_path.suffix.lower() in AUDIO_EXTENSIONS
         ]
-        label_files = sorted(label_files)
-        if max_files_per_class is not None:
-            label_files = label_files[:max_files_per_class]
+        grouped_files[target_label].extend(sorted(label_files))
+
+    for label_index, label in enumerate(labels):
+        label_files = sorted(grouped_files[label])
+        if max_files_per_class is not None and len(label_files) > max_files_per_class:
+            rng = np.random.default_rng(VOICE_SAMPLE_SEED + label_index)
+            sampled_indices = np.sort(rng.choice(len(label_files), size=max_files_per_class, replace=False))
+            label_files = [label_files[index] for index in sampled_indices]
         LOGGER.info("Processing %s audio files for label '%s'", len(label_files), label)
         for file_path in label_files:
             try:
                 mel = audio_to_mel_spectrogram(file_path, sample_rate=sample_rate)
                 features.append(mel)
-                targets.append(label_index)
+                targets.append(label_to_index[label])
             except Exception as exc:
                 LOGGER.warning("Skipping unreadable audio file %s: %s", file_path, exc)
 

@@ -1,5 +1,6 @@
 {
   "sample_rate": 16000,
   "n_mels": 64,
-  "synthetic_data": true
+  "time_bins": 184,
+  "synthetic_data": false
 }

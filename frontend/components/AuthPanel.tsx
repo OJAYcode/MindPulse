@@ -18,6 +18,17 @@ export function AuthPanel({ onAuthenticated }: AuthPanelProps) {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  function switchMode(nextMode: "login" | "register") {
+    setMode(nextMode);
+    setName("");
+    setUsername("");
+    setEmail("");
+    setPassword("");
+    setShowPassword(false);
+    setError(null);
+    setSubmitting(false);
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSubmitting(true);
@@ -50,10 +61,10 @@ export function AuthPanel({ onAuthenticated }: AuthPanelProps) {
 
       <section className="auth-card">
         <div className="segmented-control" aria-label="Authentication mode">
-          <button className={mode === "login" ? "active" : ""} onClick={() => setMode("login")} type="button">
+          <button className={mode === "login" ? "active" : ""} onClick={() => switchMode("login")} type="button">
             Sign in
           </button>
-          <button className={mode === "register" ? "active" : ""} onClick={() => setMode("register")} type="button">
+          <button className={mode === "register" ? "active" : ""} onClick={() => switchMode("register")} type="button">
             Create account
           </button>
         </div>

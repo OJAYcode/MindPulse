@@ -183,11 +183,14 @@ def create_inference_result(
 
 @router.post("/sessions/analyze-sample", response_model=InferenceResultOut)
 async def analyze_sample(
-    face_image: UploadFile = File(...),
+    face_image: UploadFile | None = File(default=None),
+    face_images: list[UploadFile] | None = File(default=None),
     audio_file: UploadFile = File(...),
     current_user: UserOut = Depends(get_current_user),
 ) -> InferenceResultOut:
-    image_bytes = await face_image.read()
+    uploaded_face_images = face_images or ([face_image] if face_image is not None else [])
+    image_samples = [await uploaded_image.read() for uploaded_image in uploaded_face_images]
+    image_bytes = image_samples[0] if image_samples else b""
     audio_bytes = await audio_file.read()
     if not image_bytes:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded image is empty.")
@@ -198,6 +201,7 @@ async def analyze_sample(
             image_bytes=image_bytes,
             audio_bytes=audio_bytes,
             audio_filename=audio_file.filename or "audio.webm",
+            image_samples=image_samples,
         )
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc

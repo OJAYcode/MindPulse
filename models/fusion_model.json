@@ -15,9 +15,7 @@
   ],
   "voice_classes": [
     "calm",
-    "happy",
     "neutral",
-    "sad",
     "stressed"
   ],
   "classes_seen_by_model": [
@@ -27,10 +25,11 @@
   ],
   "training_target_note": "Targets are generated from the default rule-based late fusion mapping. This logistic model is an optional experimental add-on, not the primary presentation-ready fusion path.",
   "target_distribution": {
-    "low": 324,
-    "medium": 544,
-    "high": 632
+    "low": 177,
+    "medium": 324,
+    "high": 999
   },
-  "face_max_files_per_class": 750,
-  "voice_max_files_per_class": 192
+  "face_max_files_per_class": 1000,
+  "voice_max_files_per_class": 1000,
+  "voice_label_mode": "stress"
 }

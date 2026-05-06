@@ -2,7 +2,44 @@ type AudioWindow = Window & typeof globalThis & {
   webkitAudioContext?: typeof AudioContext;
 };
 
+export function delay(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+export async function waitForVideoReady(video: HTMLVideoElement, timeoutMs = 5000) {
+  if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.videoWidth > 0 && video.videoHeight > 0) {
+    return;
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      cleanup();
+      reject(new Error("Camera preview did not become ready in time."));
+    }, timeoutMs);
+
+    const onReady = () => {
+      if (video.videoWidth > 0 && video.videoHeight > 0) {
+        cleanup();
+        resolve();
+      }
+    };
+
+    const cleanup = () => {
+      window.clearTimeout(timeout);
+      video.removeEventListener("loadedmetadata", onReady);
+      video.removeEventListener("canplay", onReady);
+      video.removeEventListener("playing", onReady);
+    };
+
+    video.addEventListener("loadedmetadata", onReady);
+    video.addEventListener("canplay", onReady);
+    video.addEventListener("playing", onReady);
+    onReady();
+  });
+}
+
 export async function captureVideoFrame(video: HTMLVideoElement): Promise<Blob> {
+  await waitForVideoReady(video);
   const canvas = document.createElement("canvas");
   canvas.width = video.videoWidth || 640;
   canvas.height = video.videoHeight || 480;
@@ -22,8 +59,29 @@ export async function captureVideoFrame(video: HTMLVideoElement): Promise<Blob> 
   });
 }
 
+export async function captureVideoFrames(
+  video: HTMLVideoElement,
+  count = 5,
+  intervalMs = 700
+): Promise<Blob[]> {
+  const frames: Blob[] = [];
+  for (let index = 0; index < count; index += 1) {
+    frames.push(await captureVideoFrame(video));
+    if (index < count - 1) {
+      await delay(intervalMs);
+    }
+  }
+  return frames;
+}
+
 export function recordAudioSample(stream: MediaStream, durationMs = 3000): Promise<Blob> {
   return new Promise((resolve, reject) => {
+    const audioTracks = stream.getAudioTracks();
+    if (audioTracks.length === 0) {
+      reject(new Error("No microphone track is available for this session."));
+      return;
+    }
+
     const audioWindow = window as AudioWindow;
     const AudioContextClass = audioWindow.AudioContext || audioWindow.webkitAudioContext;
     if (!AudioContextClass) {
@@ -31,22 +89,34 @@ export function recordAudioSample(stream: MediaStream, durationMs = 3000): Promi
       return;
     }
     const audioContext = new AudioContextClass();
-    const source = audioContext.createMediaStreamSource(stream);
+    const audioStream = new MediaStream(audioTracks);
+    const source = audioContext.createMediaStreamSource(audioStream);
     const processor = audioContext.createScriptProcessor(4096, 1, 1);
+    const silence = audioContext.createGain();
     const chunks: Float32Array[] = [];
+    silence.gain.value = 0;
 
     processor.onaudioprocess = (event) => {
       chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
     };
 
     source.connect(processor);
-    processor.connect(audioContext.destination);
+    processor.connect(silence);
+    silence.connect(audioContext.destination);
+
+    audioContext.resume().catch(() => undefined);
 
     window.setTimeout(() => {
       processor.disconnect();
       source.disconnect();
-      audioContext.close().catch(() => undefined);
+      silence.disconnect();
       const samples = flattenAudioChunks(chunks);
+      const minimumSamples = Math.floor(audioContext.sampleRate * Math.min(durationMs / 1000, 2));
+      audioContext.close().catch(() => undefined);
+      if (samples.length < minimumSamples) {
+        reject(new Error("The microphone sample was too short. Please try again and allow the scan to finish."));
+        return;
+      }
       resolve(encodeWav(samples, audioContext.sampleRate));
     }, durationMs);
   });
