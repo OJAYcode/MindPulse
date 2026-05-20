@@ -1,794 +1,668 @@
 "use client";
 
-import type { ReactNode } from "react";
-import { useMemo, useRef, useState } from "react";
-import { analyzeSample, changePassword, updateProfile } from "../lib/api";
-import { captureVideoFrames, delay, recordAudioSample, waitForVideoReady } from "../lib/capture";
-import type { DashboardSummary, InferenceResult, StressLevel, User } from "../lib/types";
+import { useMemo, useRef, useState, useEffect, type ReactNode } from "react";
+import {
+  LayoutDashboard, Activity, Clock, User2, LogOut,
+  Camera, StopCircle, ScanLine, TrendingUp, AlertTriangle, CheckCircle,
+  Search, Filter, Eye, EyeOff, Save, KeyRound, Brain, ChevronRight,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { analyzeSample, changePassword, updateProfile } from "@/lib/api";
+import { captureVideoFrames, delay, recordAudioSample, waitForVideoReady } from "@/lib/capture";
+import type { DashboardSummary, InferenceResult, StressLevel, User } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
-type DashboardProps = {
-  user: User;
-  token: string;
-  summary: DashboardSummary | null;
-  onRefresh: () => Promise<void>;
-  refreshing: boolean;
-  onUserUpdated: (user: User) => void;
-  onLogout: () => void;
+type Props = {
+  user: User; token: string; summary: DashboardSummary | null;
+  onRefresh: () => Promise<void>; refreshing: boolean;
+  onUserUpdated: (u: User) => void; onLogout: () => void;
 };
+type View = "overview" | "session" | "history" | "profile";
 
-type DashboardView = "overview" | "session" | "history" | "profile";
+const SCAN_READY_MS  = 900;
+const SCAN_REC_MS    = 5500;
+const SCAN_FRAMES    = 5;
+const SCAN_FRAME_INT = 850;
+const SCAN_TOTAL_MS  = SCAN_READY_MS + SCAN_REC_MS;
 
-const stressTone: Record<StressLevel, string> = {
-  low: "tone-low",
-  medium: "tone-medium",
-  high: "tone-high"
-};
+const pct = (v: number) => `${Math.round(v * 100)}%`;
+const cap = (s: string)  => s.charAt(0).toUpperCase() + s.slice(1);
 
-const desktopTabs: { key: DashboardView; label: string; icon: ReactNode }[] = [
-  {
-    key: "overview",
-    label: "Overview",
-    icon: (
-      <svg aria-hidden="true" viewBox="0 0 24 24">
-        <path
-          d="M4 12.5 12 5l8 7.5M7.5 10v8h9v-8"
-          fill="none"
-          stroke="currentColor"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth="1.9"
-        />
-      </svg>
-    )
-  },
-  {
-    key: "session",
-    label: "Session",
-    icon: (
-      <svg aria-hidden="true" viewBox="0 0 24 24">
-        <path
-          d="M7 9a2 2 0 0 1 2-2h5l3 3v5a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V9Zm8 0v2h2"
-          fill="none"
-          stroke="currentColor"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth="1.9"
-        />
-      </svg>
-    )
-  },
-  {
-    key: "history",
-    label: "History",
-    icon: (
-      <svg aria-hidden="true" viewBox="0 0 24 24">
-        <path
-          d="M12 7.5v5l3.5 2M20 12a8 8 0 1 1-2.34-5.66M20 4v4h-4"
-          fill="none"
-          stroke="currentColor"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth="1.9"
-        />
-      </svg>
-    )
-  },
-  {
-    key: "profile",
-    label: "Profile",
-    icon: (
-      <svg aria-hidden="true" viewBox="0 0 24 24">
-        <path
-          d="M12 12a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm-6 7a6 6 0 0 1 12 0"
-          fill="none"
-          stroke="currentColor"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth="1.9"
-        />
-      </svg>
-    )
-  }
-];
-
-const mobileTabs = desktopTabs;
-const SCAN_READY_DELAY_MS = 900;
-const SCAN_RECORDING_MS = 5500;
-const SCAN_FRAME_COUNT = 5;
-const SCAN_FRAME_INTERVAL_MS = 850;
-const SCAN_TOTAL_MS = SCAN_READY_DELAY_MS + SCAN_RECORDING_MS;
-
-function percent(value: number) {
-  return `${Math.round(value * 100)}%`;
+function stressMeta(lvl: StressLevel) {
+  if (lvl === "high")   return { title: "Needs a pause",  badge: "High",   summary: "This check-in suggests you may be feeling quite strained right now.", guidance: "Take a short break, slow your breathing, and check in again after a moment.", feeling: "You may be under quite a bit of pressure right now." };
+  if (lvl === "medium") return { title: "A bit tense",    badge: "Medium", summary: "This check-in shows some tension or pressure at the moment.",           guidance: "A short break or a calmer environment may help before the next check-in.", feeling: "There are some signs of tension, but nothing extreme." };
+  return                       { title: "Steady & calm",  badge: "Low",    summary: "This check-in suggests a calmer, more stable state.",                    guidance: "Keep going and scan again whenever you want an update.",                   feeling: "You seem fairly steady at the moment." };
 }
 
-function titleCase(value: string) {
-  return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
-function emotionCopy(label: string) {
-  const key = label.toLowerCase();
-  const map: Record<string, string> = {
-    calm: "sounded calm",
-    stressed: "sounded tense",
-    neutral: "looked steady",
-    happy: "looked positive",
-    sad: "looked low",
-    angry: "looked tense"
-  };
-  return map[key] ?? label;
-}
-
-function stressCopy(level: StressLevel) {
-  if (level === "high") {
-    return {
-      title: "Needs a pause",
-      badge: "High",
-      summary: "This check-in suggests you may be feeling quite strained right now.",
-      guidance: "Take a short pause, slow your breathing, and check in again after a moment.",
-      feeling: "You may be under quite a bit of pressure right now.",
-      nextStepTitle: "Best next step"
-    };
-  }
-  if (level === "medium") {
-    return {
-      title: "A bit tense",
-      badge: "Medium",
-      summary: "This check-in suggests some tension or pressure at the moment.",
-      guidance: "A short break or a calmer environment may help before the next check-in.",
-      feeling: "There are some signs of tension, but not an extreme level.",
-      nextStepTitle: "Helpful next step"
-    };
-  }
-  return {
-    title: "Steady",
-    badge: "Low",
-    summary: "This check-in suggests a calmer or more stable state.",
-    guidance: "You can keep going and scan again later if you want another update.",
-    feeling: "You seem fairly steady at the moment.",
-    nextStepTitle: "What to do next"
-  };
-}
-
-function resultHeadline(result: DashboardSummary["latest_result"]) {
-  if (!result) {
-    return "Ready for your first check-in";
-  }
-  if (result.stress_level === "high") {
-    return "You may need a short pause";
-  }
-  if (result.stress_level === "medium") {
-    return "You seem a bit tense right now";
-  }
+function heroHeadline(r: InferenceResult | null) {
+  if (!r)                     return "Ready for your first check-in";
+  if (r.stress_level === "high")   return "You may need a short pause";
+  if (r.stress_level === "medium") return "You seem a bit tense right now";
   return "You seem fairly steady right now";
 }
 
-function faceObservation(label: string) {
-  const key = label.toLowerCase();
-  const map: Record<string, string> = {
-    calm: "Your face looked calm and settled.",
-    neutral: "Your face looked fairly steady.",
-    happy: "Your face showed some positive energy.",
-    sad: "Your face showed signs of low mood or tiredness.",
-    angry: "Your face showed visible tension.",
-    stressed: "Your face showed visible stress."
-  };
-  return map[key] ?? `Your face signal was read as ${label}.`;
+const faceObs: Record<string, string>  = { calm: "Your face looked calm and settled.", neutral: "Your face looked fairly steady.", happy: "Your face showed positive energy.", sad: "Your face showed signs of low mood.", angry: "Your face showed visible tension.", stressed: "Your face showed visible stress." };
+const voiceObs: Record<string, string> = { calm: "Your voice sounded calm.", neutral: "Your voice sounded steady.", happy: "Your voice sounded upbeat.", sad: "Your voice sounded low or subdued.", angry: "Your voice sounded tense.", stressed: "Your voice sounded pressured." };
+
+const orbCls:  Record<StressLevel, string> = { low: "orb-low", medium: "orb-mid", high: "orb-hi" };
+const pillCls: Record<StressLevel, string> = { low: "pill-low", medium: "pill-mid", high: "pill-hi" };
+const barCol:  Record<StressLevel, string> = { low: "var(--green)", medium: "var(--amber)", high: "var(--red)" };
+
+function empty(): DashboardSummary {
+  return { total_results: 0, latest_result: null, stress_distribution: { low: 0, medium: 0, high: 0 }, average_face_confidence: 0, average_voice_confidence: 0, high_stress_rate: 0, recent_results: [] };
 }
 
-function voiceObservation(label: string) {
-  const key = label.toLowerCase();
-  const map: Record<string, string> = {
-    calm: "Your voice sounded calm.",
-    neutral: "Your voice sounded steady.",
-    happy: "Your voice sounded more upbeat.",
-    sad: "Your voice sounded low or subdued.",
-    angry: "Your voice sounded tense.",
-    stressed: "Your voice sounded tense or pressured."
-  };
-  return map[key] ?? `Your voice signal was read as ${label}.`;
+function visible(s: DashboardSummary, uid: number): DashboardSummary {
+  const rs   = s.recent_results.filter(r => r.source !== "demo_session" && (r.user_id === uid || r.user_id == null));
+  const dist = rs.reduce((d, r) => { d[r.stress_level]++; return d; }, { low: 0, medium: 0, high: 0 } as Record<StressLevel, number>);
+  const n    = rs.length;
+  return { ...s, total_results: n, latest_result: rs[0] ?? null, stress_distribution: dist, average_face_confidence: n ? rs.reduce((t, r) => t + r.face_confidence, 0) / n : 0, average_voice_confidence: n ? rs.reduce((t, r) => t + r.voice_confidence, 0) / n : 0, high_stress_rate: n ? dist.high / n : 0, recent_results: rs };
 }
 
-function emptySummary(): DashboardSummary {
-  return {
-    total_results: 0,
-    latest_result: null,
-    stress_distribution: { low: 0, medium: 0, high: 0 },
-    average_face_confidence: 0,
-    average_voice_confidence: 0,
-    high_stress_rate: 0,
-    recent_results: []
-  };
+function Pane({ children }: { children: ReactNode }) {
+  const [k, setK] = useState(0);
+  useEffect(() => { setK(x => x + 1); }, []);
+  return <div key={k} className="view-pane">{children}</div>;
 }
 
-function isDemoRecord(source: string) {
-  return source === "demo_session";
-}
+/* ════════════════════════════════════════════════════════════════ */
+export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserUpdated, onLogout }: Props) {
+  const raw   = summary ?? empty();
+  const data  = visible(raw, user.id);
+  const all   = raw.recent_results;
+  const dTot  = Math.max(data.total_results, 1);
 
-function visibleSummary(summary: DashboardSummary, userId: number): DashboardSummary {
-  const activeResults = summary.recent_results.filter((result) => {
-    return !isDemoRecord(result.source) && (result.user_id === userId || result.user_id === null || result.user_id === undefined);
-  });
-  const stressDistribution = activeResults.reduce(
-    (distribution, result) => {
-      distribution[result.stress_level] += 1;
-      return distribution;
-    },
-    { low: 0, medium: 0, high: 0 } as Record<StressLevel, number>
-  );
-  const total = activeResults.length;
-  const averageFace = activeResults.reduce((sum, result) => sum + result.face_confidence, 0) / Math.max(total, 1);
-  const averageVoice = activeResults.reduce((sum, result) => sum + result.voice_confidence, 0) / Math.max(total, 1);
-  return {
-    ...summary,
-    total_results: total,
-    latest_result: activeResults[0] ?? null,
-    stress_distribution: stressDistribution,
-    average_face_confidence: total ? averageFace : 0,
-    average_voice_confidence: total ? averageVoice : 0,
-    high_stress_rate: total ? stressDistribution.high / total : 0,
-    recent_results: activeResults
-  };
-}
+  const [view,   setView]   = useState<View>("overview");
+  const [riskF,  setRiskF]  = useState<"all" | StressLevel>("all");
+  const [query,  setQuery]  = useState("");
 
-export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserUpdated, onLogout }: DashboardProps) {
-  const rawData = summary ?? emptySummary();
-  const data = visibleSummary(rawData, user.id);
-  const historyResults = rawData.recent_results;
-  const distributionTotal = Math.max(data.total_results, 1);
-  const [activeView, setActiveView] = useState<DashboardView>("overview");
-  const [riskFilter, setRiskFilter] = useState<"all" | StressLevel>("all");
-  const [query, setQuery] = useState("");
-  const [profileName, setProfileName] = useState(user.name);
-  const [profileUsername, setProfileUsername] = useState(user.username);
-  const [profileEmail, setProfileEmail] = useState(user.email);
-  const [currentPassword, setCurrentPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [profileMessage, setProfileMessage] = useState<string | null>(null);
-  const [profileError, setProfileError] = useState<string | null>(null);
-  const [sessionActive, setSessionActive] = useState(false);
-  const [sessionBusy, setSessionBusy] = useState(false);
-  const [sessionMessage, setSessionMessage] = useState("Camera and microphone are ready when you start a session.");
-  const [sessionError, setSessionError] = useState<string | null>(null);
-  const [currentScanResult, setCurrentScanResult] = useState<InferenceResult | null>(null);
-  const [scanStartedAt, setScanStartedAt] = useState<string | null>(null);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const scanRunRef = useRef(0);
-  const filteredResults = useMemo(() => {
-    return historyResults.filter((result) => {
-      const matchesRisk = riskFilter === "all" || result.stress_level === riskFilter;
-      const searchable = `${result.face_emotion} ${result.voice_emotion} ${result.source}`.toLowerCase();
-      return matchesRisk && searchable.includes(query.trim().toLowerCase());
-    });
-  }, [historyResults, query, riskFilter]);
-  const mostCommonRisk = (Object.entries(data.stress_distribution) as [StressLevel, number][])
-    .sort((a, b) => b[1] - a[1])[0]?.[0] ?? "low";
-  const latestResult = currentScanResult ?? data.latest_result;
-  const latestStress = latestResult?.stress_level ?? "low";
-  const latestStressCopy = stressCopy(latestStress);
+  const [pName,  setPName]  = useState(user.name);
+  const [pUser,  setPUser]  = useState(user.username);
+  const [pEmail, setPEmail] = useState(user.email);
+  const [curPwd, setCurPwd] = useState("");
+  const [newPwd, setNewPwd] = useState("");
+  const [showC,  setShowC]  = useState(false);
+  const [showN,  setShowN]  = useState(false);
+  const [pMsg,   setPMsg]   = useState<string | null>(null);
+  const [pErr,   setPErr]   = useState<string | null>(null);
+  const [pwMsg,  setPwMsg]  = useState<string | null>(null);
+  const [pwErr,  setPwErr]  = useState<string | null>(null);
 
-  async function captureAndAnalyze(stream: MediaStream) {
-    if (!videoRef.current) {
-      throw new Error("Camera preview is not ready yet.");
-    }
-    const scanRunId = scanRunRef.current + 1;
-    scanRunRef.current = scanRunId;
-    setCurrentScanResult(null);
-    setScanStartedAt(new Date().toISOString());
-    setSessionBusy(true);
-    setSessionMessage("Get ready. Keep your face visible and speak naturally.");
+  const [sesOn,  setSesOn]  = useState(false);
+  const [sesBusy,setSesBusy]= useState(false);
+  const [sesTxt, setSesTxt] = useState("Camera and microphone are ready when you start a session.");
+  const [sesErr, setSesErr] = useState<string | null>(null);
+  const [result, setResult] = useState<InferenceResult | null>(null);
+  const [scanAt, setScanAt] = useState<string | null>(null);
+
+  const vidRef   = useRef<HTMLVideoElement | null>(null);
+  const streamRef= useRef<MediaStream | null>(null);
+  const runRef   = useRef(0);
+
+  const filtered = useMemo(() => all.filter(r => {
+    const ok = riskF === "all" || r.stress_level === riskF;
+    return ok && `${r.face_emotion} ${r.voice_emotion} ${r.source}`.toLowerCase().includes(query.trim().toLowerCase());
+  }), [all, query, riskF]);
+
+  const latest  = result ?? data.latest_result;
+  const lvl     = latest?.stress_level ?? "low";
+  const meta    = stressMeta(lvl);
+
+  async function doScan(stream: MediaStream) {
+    if (!vidRef.current) throw new Error("Camera not ready.");
+    const id = ++runRef.current;
+    setResult(null); setScanAt(new Date().toISOString()); setSesBusy(true);
+    setSesTxt("Get ready — keep your face visible and speak naturally.");
     try {
-      await waitForVideoReady(videoRef.current);
-      if (scanRunRef.current !== scanRunId) return;
-      await delay(SCAN_READY_DELAY_MS);
-      if (scanRunRef.current !== scanRunId) return;
-      setSessionMessage("Recording a short sample. Please keep speaking until it finishes.");
-      const audioPromise = recordAudioSample(stream, SCAN_RECORDING_MS);
-      const faceImages = await captureVideoFrames(videoRef.current, SCAN_FRAME_COUNT, SCAN_FRAME_INTERVAL_MS);
-      await delay(Math.max(SCAN_RECORDING_MS - SCAN_FRAME_COUNT * SCAN_FRAME_INTERVAL_MS, 0));
-      if (scanRunRef.current !== scanRunId) return;
-      const audioFile = await audioPromise;
-      if (scanRunRef.current !== scanRunId) return;
-      setSessionMessage("Analyzing sample...");
-      const result = await analyzeSample(token, { faceImages, audioFile });
-      if (scanRunRef.current !== scanRunId) return;
-      setCurrentScanResult(result);
-      await onRefresh();
-      setSessionMessage("New reading saved. You can scan again or stop the session.");
-    } finally {
-      if (scanRunRef.current === scanRunId) {
-        setSessionBusy(false);
-      }
-    }
+      await waitForVideoReady(vidRef.current); if (runRef.current !== id) return;
+      await delay(SCAN_READY_MS);              if (runRef.current !== id) return;
+      setSesTxt("Recording. Keep speaking naturally until it finishes.");
+      const audioP = recordAudioSample(stream, SCAN_REC_MS);
+      const frames = await captureVideoFrames(vidRef.current, SCAN_FRAMES, SCAN_FRAME_INT);
+      await delay(Math.max(SCAN_REC_MS - SCAN_FRAMES * SCAN_FRAME_INT, 0)); if (runRef.current !== id) return;
+      const audio  = await audioP; if (runRef.current !== id) return;
+      setSesTxt("Analysing…");
+      const res = await analyzeSample(token, { faceImages: frames, audioFile: audio }); if (runRef.current !== id) return;
+      setResult(res); await onRefresh(); setSesTxt("Reading saved. Scan again or stop the session.");
+    } finally { if (runRef.current === id) setSesBusy(false); }
   }
 
-  async function startBrowserSession() {
-    setSessionError(null);
+  async function startSession() {
+    setSesErr(null);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user" },
-        audio: true
-      });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-        await waitForVideoReady(videoRef.current);
-      }
-      setSessionActive(true);
-      setSessionMessage("Session started. Keep your face visible and speak naturally.");
-      await captureAndAnalyze(stream);
-    } catch (error) {
-      setSessionError(error instanceof Error ? error.message : "Could not start session.");
-      stopBrowserSession();
-    }
+      const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: true });
+      streamRef.current = s;
+      if (vidRef.current) { vidRef.current.srcObject = s; await vidRef.current.play(); await waitForVideoReady(vidRef.current); }
+      setSesOn(true); setSesTxt("Session started. Keep your face visible and speak naturally.");
+      await doScan(s);
+    } catch (e) { setSesErr(e instanceof Error ? e.message : "Could not start session."); stopSession(); }
   }
 
-  function stopBrowserSession() {
-    scanRunRef.current += 1;
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    streamRef.current = null;
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-    }
-    setSessionActive(false);
-    setSessionBusy(false);
-    setSessionMessage("Session stopped.");
+  function stopSession() {
+    runRef.current++;
+    streamRef.current?.getTracks().forEach(t => t.stop()); streamRef.current = null;
+    if (vidRef.current) vidRef.current.srcObject = null;
+    setSesOn(false); setSesBusy(false); setSesTxt("Session stopped.");
   }
 
   async function scanAgain() {
-    if (!streamRef.current || sessionBusy) return;
-    setSessionError(null);
-    try {
-      await captureAndAnalyze(streamRef.current);
-    } catch (error) {
-      setSessionError(error instanceof Error ? error.message : "Could not analyze sample.");
-    }
+    if (!streamRef.current || sesBusy) return; setSesErr(null);
+    try { await doScan(streamRef.current); }
+    catch (e) { setSesErr(e instanceof Error ? e.message : "Could not analyse sample."); }
   }
 
-  function renderSessionPanel(className = "") {
-    return (
-      <section className={`panel session-panel ${className}`.trim()}>
-        <div className="session-copy">
-          <p className="eyebrow">Session</p>
-          <h2>{sessionActive ? "Session running" : "Start a scan"}</h2>
-          <p>{sessionMessage}</p>
-          <p className="session-note">Camera and microphone access requires HTTPS when deployed.</p>
-          {sessionError && <div className="form-error">{sessionError}</div>}
-          <div className="session-actions">
-            {!sessionActive ? (
-              <button className="primary-button" disabled={sessionBusy} onClick={startBrowserSession} type="button">
-                Start session
-              </button>
-            ) : (
-              <>
-                <button className="primary-button" disabled={sessionBusy} onClick={scanAgain} type="button">
-                  {sessionBusy ? "Scanning..." : "Scan again"}
-                </button>
-                <button className="outline-button" onClick={stopBrowserSession} type="button">
-                  Stop session
-                </button>
-              </>
-            )}
-          </div>
-        </div>
-        <div className="video-preview-wrap">
-          <video ref={videoRef} className="video-preview" muted playsInline />
-          {!sessionActive && <span>Camera preview</span>}
-        </div>
-      </section>
-    );
-  }
+  const navItems: { key: View; label: string; icon: ReactNode }[] = [
+    { key: "overview", label: "Overview", icon: <LayoutDashboard size={18} /> },
+    { key: "session",  label: "Session",  icon: <Camera size={18} /> },
+    { key: "history",  label: "History",  icon: <Clock size={18} /> },
+    { key: "profile",  label: "Profile",  icon: <User2 size={18} /> },
+  ];
 
-  return (
-    <main className={`dashboard-shell dashboard-view-${activeView}`}>
-      <nav className="topbar">
-        <div className="topbar-brand">
-          <div>
-            <span className="brand-mark">M</span>
-            <span className="brand-text">MindPulse</span>
-          </div>
-          <span className="welcome-text">Welcome, {user.username}</span>
-        </div>
-        <div className="topbar-actions">
-          <button className="ghost-button" disabled={refreshing} onClick={onRefresh}>
-            {refreshing ? "Refreshing..." : "Refresh"}
-          </button>
-          <button className="outline-button" onClick={onLogout}>Logout</button>
-        </div>
-        <button
-          aria-label="Refresh dashboard"
-          className="mobile-refresh-button"
-          disabled={refreshing}
-          onClick={onRefresh}
-          type="button"
-        >
-          <svg aria-hidden="true" viewBox="0 0 24 24">
-            <path
-              d="M20 4v5h-5M4 20v-5h5M6.6 9.2A7 7 0 0 1 18 6.5L20 9M4 15l2-2.5A7 7 0 0 0 17.4 14.8"
-              fill="none"
-              stroke="currentColor"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth="1.9"
-            />
-          </svg>
-        </button>
-      </nav>
-
-      <section className="dashboard-hero-card">
-        <div>
-          <p className="eyebrow">Overview</p>
-          <h1>{resultHeadline(latestResult)}</h1>
-          <p>
-            {latestResult
-              ? latestStressCopy.feeling
-              : "MindPulse is ready to read a short face and voice sample when you begin."}
-          </p>
-        </div>
-        <div className={`stress-orb ${stressTone[latestStress]}`}>
-          <span>{data.latest_result ? latestStressCopy.badge : "Ready"}</span>
-          <small>{data.latest_result ? "current state" : "waiting to scan"}</small>
-        </div>
-      </section>
-
-      <section className="dashboard-tabs desktop-tabs" aria-label="Dashboard sections">
-        {desktopTabs.filter((tab) => tab.key !== "session").map((tab) => (
-          <button
-            key={tab.key}
-            className={activeView === tab.key ? "active" : ""}
-            onClick={() => setActiveView(tab.key)}
-            type="button"
-          >
-            <span className="tab-icon">{tab.icon}</span>
-            <span className="tab-label">{tab.label}</span>
-          </button>
-        ))}
-      </section>
-
-      {activeView === "overview" && renderSessionPanel("desktop-session-panel")}
-
-      {activeView === "session" ? (
-        <>
-          {renderSessionPanel("mobile-session-panel")}
-          <section className="panel result-panel">
-            <p className="eyebrow">{sessionBusy ? "Current scan" : "Latest result"}</p>
-            {sessionBusy ? (
-              <div className="scan-progress-card">
-                <span className="pulse-dot" />
-                <div>
-                  <h2>Scanning new sample</h2>
-                  <p>
-                    This is a fresh {Math.round(SCAN_TOTAL_MS / 1000)} second scan. The previous result is hidden until this one finishes.
-                  </p>
-                  {scanStartedAt && <small>Started at {new Date(scanStartedAt).toLocaleTimeString()}</small>}
-                </div>
-              </div>
-            ) : latestResult ? (
-              <>
-                <h2>{stressCopy(latestResult.stress_level).title}</h2>
-                <p>{stressCopy(latestResult.stress_level).summary}</p>
-                <div className="result-signal-grid">
-                  <div className="result-signal-card">
-                    <span>Face signal</span>
-                    <strong>{titleCase(latestResult.face_emotion)}</strong>
-                    <small>{emotionCopy(latestResult.face_emotion)} • {percent(latestResult.face_confidence)}</small>
-                  </div>
-                  <div className="result-signal-card">
-                    <span>Voice signal</span>
-                    <strong>{titleCase(latestResult.voice_emotion)}</strong>
-                    <small>{emotionCopy(latestResult.voice_emotion)} • {percent(latestResult.voice_confidence)}</small>
-                  </div>
-                </div>
-                <div className="result-guidance">
-                  <strong>What this means</strong>
-                  <p>{stressCopy(latestResult.stress_level).guidance}</p>
-                </div>
-              </>
-            ) : (
-              <p>Your first reading will appear here after a short camera and microphone scan.</p>
-            )}
-          </section>
-        </>
-      ) : activeView === "overview" ? (
-        <>
-          <section className="content-grid result-story-grid">
-            <article className="panel story-panel">
-              <p className="eyebrow">What this means</p>
-              {latestResult ? (
-                <>
-                  <h2>{stressCopy(latestResult.stress_level).title}</h2>
-                  <p>{stressCopy(latestResult.stress_level).summary}</p>
-                  <div className="story-note">
-                    <strong>{stressCopy(latestResult.stress_level).nextStepTitle}</strong>
-                    <p>{stressCopy(latestResult.stress_level).guidance}</p>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <h2>Your first reading starts here</h2>
-                  <p>Once you complete a scan, this section will describe your current state in plain language.</p>
-                </>
-              )}
-            </article>
-
-            <article className="panel story-panel">
-              <p className="eyebrow">What we noticed</p>
-              {latestResult ? (
-                <>
-                  <h2>Face and voice signals</h2>
-                  <div className="story-list">
-                    <div className="story-item">
-                      <strong>Face</strong>
-                      <p>{faceObservation(latestResult.face_emotion)}</p>
-                    </div>
-                    <div className="story-item">
-                      <strong>Voice</strong>
-                      <p>{voiceObservation(latestResult.voice_emotion)}</p>
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <h2>Signals will appear after scanning</h2>
-                  <p>The app will summarize the face and voice cues it used, so the result is easier to understand.</p>
-                </>
-              )}
-            </article>
-
-            <article className="panel story-panel">
-              <p className="eyebrow">Quick overview</p>
-              {latestResult ? (
-                <>
-                  <h2>Latest check-in details</h2>
-                  <div className="story-list compact-story-list">
-                    <div className="story-item">
-                      <strong>Stress level</strong>
-                      <p>{stressCopy(latestResult.stress_level).title}</p>
-                    </div>
-                    <div className="story-item">
-                      <strong>Session count</strong>
-                      <p>{data.total_results} saved {data.total_results === 1 ? "check-in" : "check-ins"} so far.</p>
-                    </div>
-                    <div className="story-item">
-                      <strong>Saved at</strong>
-                      <p>{new Date(latestResult.timestamp).toLocaleString()}</p>
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <h2>Your timeline is ready</h2>
-                  <p>Completed scans will be saved here with the time, level, and source of each reading.</p>
-                </>
-              )}
-            </article>
-          </section>
-        </>
-      ) : activeView === "history" ? (
-        <section className="panel history-panel">
-          <div className="panel-header history-header">
-            <div>
-              <p className="eyebrow">History</p>
-              <h2>Reading history</h2>
-            </div>
-            <div className="history-controls">
-              <input
-                aria-label="Search readings"
-                placeholder="Search readings"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-              />
-              <select
-                aria-label="Filter risk level"
-                value={riskFilter}
-                onChange={(event) => setRiskFilter(event.target.value as "all" | StressLevel)}
-              >
-                <option value="all">All levels</option>
-                <option value="low">Low</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="history-list">
-            {filteredResults.length === 0 ? (
-              <div className="empty-state">
-                <h3>Nothing matches this filter</h3>
-                <p>Adjust the search or level filter to bring readings back into view.</p>
-              </div>
-            ) : (
-              filteredResults.map((result) => (
-                <article className="history-card" key={result.id}>
-                  <div>
-                    <span className={`status-pill ${stressTone[result.stress_level]}`}>{result.stress_level}</span>
-                    <h3>{stressCopy(result.stress_level).title}</h3>
-                    <p>
-                      Face signal {emotionCopy(result.face_emotion)} and voice signal {emotionCopy(result.voice_emotion)}.
-                    </p>
-                    <p>{new Date(result.timestamp).toLocaleString()} • {formatSource(result.source)}</p>
-                  </div>
-                  <div className="history-confidence">
-                    <span>Face {percent(result.face_confidence)}</span>
-                    <span>Voice {percent(result.voice_confidence)}</span>
-                  </div>
-                </article>
-              ))
-            )}
-          </div>
-        </section>
-      ) : (
-        <section className="profile-grid">
-          <article className="panel profile-panel">
-            <p className="eyebrow">Profile</p>
-            <h2>Account details</h2>
-            <form
-              onSubmit={async (event) => {
-                event.preventDefault();
-                setProfileError(null);
-                setProfileMessage(null);
-                try {
-                  const updatedUser = await updateProfile(token, {
-                    name: profileName,
-                    username: profileUsername,
-                    email: profileEmail
-                  });
-                  onUserUpdated(updatedUser);
-                  setProfileMessage("Profile updated.");
-                } catch (error) {
-                  setProfileError(error instanceof Error ? error.message : "Could not update profile.");
-                }
-              }}
-            >
-              <label>
-                Full name
-                <input value={profileName} onChange={(event) => setProfileName(event.target.value)} required />
-              </label>
-              <label>
-                Username
-                <input
-                  value={profileUsername}
-                  onChange={(event) => setProfileUsername(event.target.value)}
-                  minLength={3}
-                  pattern="[a-zA-Z0-9_]+"
-                  required
-                />
-              </label>
-              <label>
-                Email address
-                <input type="email" value={profileEmail} onChange={(event) => setProfileEmail(event.target.value)} required />
-              </label>
-              {profileError && <div className="form-error">{profileError}</div>}
-              {profileMessage && <div className="form-success">{profileMessage}</div>}
-              <button className="primary-button" type="submit">Save changes</button>
-            </form>
-          </article>
-
-          <article className="panel profile-panel">
-            <p className="eyebrow">Security</p>
-            <h2>Change password</h2>
-            <form
-              onSubmit={async (event) => {
-                event.preventDefault();
-                setProfileError(null);
-                setProfileMessage(null);
-                try {
-                  await changePassword(token, {
-                    current_password: currentPassword,
-                    new_password: newPassword
-                  });
-                  setCurrentPassword("");
-                  setNewPassword("");
-                  setProfileMessage("Password changed. Sign in again with your new password.");
-                  window.setTimeout(onLogout, 1200);
-                } catch (error) {
-                  setProfileError(error instanceof Error ? error.message : "Could not change password.");
-                }
-              }}
-            >
-              <label>
-                Current password
-                <input
-                  type="password"
-                  value={currentPassword}
-                  onChange={(event) => setCurrentPassword(event.target.value)}
-                  minLength={8}
-                  required
-                />
-              </label>
-              <label>
-                New password
-                <input
-                  type="password"
-                  value={newPassword}
-                  onChange={(event) => setNewPassword(event.target.value)}
-                  minLength={8}
-                  required
-                />
-              </label>
-              <button className="primary-button" type="submit">Update password</button>
-            </form>
-
-            <div className="profile-logout-block">
-              <p className="eyebrow">Session</p>
-              <h2>Log out</h2>
-              <p>Sign out of your workspace on this device when you are done.</p>
-              <button className="outline-button profile-logout-button" onClick={onLogout} type="button">
-                Logout
-              </button>
-            </div>
-          </article>
-        </section>
-      )}
-
-      <section className="panel table-panel compact-table">
-        <div className="panel-header">
-          <div>
-            <p className="eyebrow">Recent</p>
-            <h2>Latest records</h2>
-          </div>
-        </div>
-        <div className="responsive-table">
-          <table>
-            <thead>
-              <tr>
-                <th>Time</th>
-                <th>Expression</th>
-                <th>Voice</th>
-                <th>Risk</th>
-                <th>Channel</th>
-              </tr>
-            </thead>
-            <tbody>
-              {historyResults.length === 0 ? (
-                <tr>
-                  <td colSpan={5}>Your recent readings will appear here after your first scan.</td>
-                </tr>
-              ) : (
-                historyResults.map((result) => (
-                  <tr key={result.id}>
-                    <td data-label="Time">{new Date(result.timestamp).toLocaleString()}</td>
-                    <td data-label="Expression">{result.face_emotion} - {percent(result.face_confidence)}</td>
-                    <td data-label="Voice">{result.voice_emotion} - {percent(result.voice_confidence)}</td>
-                    <td data-label="Risk"><span className={`status-pill ${stressTone[result.stress_level]}`}>{result.stress_level}</span></td>
-                    <td data-label="Channel">{formatSource(result.source)}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <nav className="mobile-bottom-nav" aria-label="Mobile dashboard navigation">
-        {mobileTabs.map((tab) => (
-          <button
-            key={tab.key}
-            className={activeView === tab.key ? "active" : ""}
-            onClick={() => setActiveView(tab.key)}
-            type="button"
-          >
-            <span className="tab-icon">{tab.icon}</span>
-            <span className="tab-label">{tab.label}</span>
-          </button>
-        ))}
-      </nav>
-    </main>
+  /* ── helpers ── */
+  const HeroBanner = ({ eyebrow, title, sub, right }: { eyebrow: string; title: string; sub: string; right?: ReactNode }) => (
+    <div className="hero-banner">
+      <div className="hero-inner">
+        <p className="hero-eyebrow">{eyebrow}</p>
+        <h1 className="hero-title">{title}</h1>
+        <p className="hero-sub">{sub}</p>
+      </div>
+      {right}
+    </div>
   );
-}
 
-function formatSource(source: string) {
-  return source.replaceAll("_", " ");
-}
-
-function MetricCard({ label, value, caption }: { label: string; value: string; caption: string }) {
+  /* ════════ render ════════ */
   return (
-    <article className="metric-card">
-      <span>{label}</span>
-      <strong>{value}</strong>
-      <small>{caption}</small>
-    </article>
+    <div className="db-root">
+
+      {/* ─── TOPBAR ─── */}
+      <header className="db-bar">
+        <div className="db-brand">
+          <div className="db-logo">M</div>
+          <span className="db-wordmark">MindPulse</span>
+        </div>
+
+        <nav className="db-nav" aria-label="Main navigation">
+          {navItems.map(tab => (
+            <button key={tab.key} type="button"
+              onClick={() => setView(tab.key)}
+              className={cn("db-nav-btn", view === tab.key && "on")}>
+              {tab.icon}<span>{tab.label}</span>
+            </button>
+          ))}
+        </nav>
+
+      </header>
+
+      {/* ─── CONTENT ─── */}
+      <main className="db-content">
+
+        {/* ══════════════ OVERVIEW ══════════════ */}
+        {view === "overview" && (
+          <Pane>
+            {/* Hero */}
+            <div className="hero-banner">
+              <div className="hero-inner">
+                <p className="hero-eyebrow">{data.total_results > 0 ? "Latest reading" : "Welcome to MindPulse"}</p>
+                <h1 className="hero-title">{heroHeadline(latest)}</h1>
+                <p className="hero-sub">{latest ? meta.feeling : "MindPulse analyses face and voice to give you a real-time stress check-in. Start whenever you're ready."}</p>
+                <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 22, flexWrap: "wrap" }}>
+                  {latest && (
+                    <span className={cn("pill", pillCls[lvl])}>
+                      <span className="pill-dot" />{meta.badge} stress
+                    </span>
+                  )}
+                  {latest && (
+                    <span style={{ fontSize: "0.79rem", color: "rgba(255,255,255,0.35)", fontWeight: 500 }}>
+                      {new Date(latest.timestamp).toLocaleString()}
+                    </span>
+                  )}
+                  <button type="button" onClick={() => setView("session")} style={{
+                    display: "flex", alignItems: "center", gap: 8,
+                    padding: "9px 20px", borderRadius: 12,
+                    border: "1px solid rgba(48,196,154,0.32)",
+                    background: "rgba(48,196,154,0.10)",
+                    color: "var(--green-hi)", fontSize: "0.85rem", fontWeight: 600,
+                    cursor: "pointer", transition: "background .2s",
+                    fontFamily: "var(--font-heading),'Space Grotesk',system-ui,sans-serif",
+                    letterSpacing: "-0.02em",
+                  }}>
+                    <Camera size={14} />
+                    {data.total_results > 0 ? "Scan again" : "Start first scan"}
+                    <ChevronRight size={13} />
+                  </button>
+                </div>
+              </div>
+              <div className="orb-wrap">
+                <div className={cn("orb", latest ? orbCls[lvl] : "orb-none")}>
+                  <div className="orb-inner">
+                    <span className="orb-val">{latest ? meta.badge : "–"}</span>
+                    <span className="orb-lbl">{latest ? "stress level" : "no data yet"}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Metric strip */}
+            <div className="metrics">
+              {[
+                { label: "Total scans",      value: String(data.total_results),        cap: data.total_results === 1 ? "check-in saved" : "check-ins saved", icon: <Activity size={20} />,     cls: "met-g", delay: "0.06s" },
+                { label: "High stress rate", value: pct(data.high_stress_rate),         cap: "of your sessions",   icon: <AlertTriangle size={20} />, cls: "met-r", delay: "0.11s" },
+                { label: "Face confidence",  value: pct(data.average_face_confidence),  cap: "average accuracy",   icon: <CheckCircle size={20} />,   cls: "met-g", delay: "0.16s" },
+                { label: "Voice confidence", value: pct(data.average_voice_confidence), cap: "average accuracy",   icon: <TrendingUp size={20} />,    cls: "met-a", delay: "0.21s" },
+              ].map(m => (
+                <div key={m.label} className={cn("met anim-fade-up", m.cls)} style={{ animationDelay: m.delay }}>
+                  <div className="met-icon">{m.icon}</div>
+                  <p className="met-label">{m.label}</p>
+                  <p className="met-val">{m.value}</p>
+                  <p className="met-cap">{m.cap}</p>
+                </div>
+              ))}
+            </div>
+
+            {/* Two-col: Interpretation + Distribution */}
+            <div className="two-col mb-4">
+              <div className="pcard anim-fade-up" style={{ animationDelay: "0.12s" }}>
+                <p className="p-eye">Interpretation</p>
+                {latest ? (
+                  <>
+                    <h2 className="p-title">{meta.title}</h2>
+                    <p className="p-sub" style={{ marginBottom: 20 }}>{meta.summary}</p>
+                    <div className="guide">
+                      <p className="guide-lbl">Recommended action</p>
+                      <p className="guide-txt">{meta.guidance}</p>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <h2 className="p-title">Your first reading starts here</h2>
+                    <p className="p-sub">Once you complete a scan, this section will explain your state in plain language and suggest what to do next.</p>
+                  </>
+                )}
+              </div>
+
+              <div className="pcard anim-fade-up" style={{ animationDelay: "0.18s" }}>
+                <p className="p-eye">Distribution</p>
+                <h2 className="p-title">Stress breakdown</h2>
+                <p className="p-sub" style={{ marginBottom: 24 }}>Across {data.total_results} check-in{data.total_results !== 1 ? "s" : ""}.</p>
+                {(["low", "medium", "high"] as StressLevel[]).map(l => {
+                  const count = data.stress_distribution[l];
+                  return (
+                    <div key={l} className="dist-row">
+                      <div className="dist-hd">
+                        <span className={cn("pill", pillCls[l])}><span className="pill-dot" />{cap(l)}</span>
+                        <span className="dist-cnt">{count} session{count !== 1 ? "s" : ""}</span>
+                      </div>
+                      <div className="bar-track">
+                        <span className="bar-fill" style={{ width: `${(count / dTot) * 100}%`, background: barCol[l] }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Signal cards */}
+            {latest && (
+              <div className="two-col mb-4">
+                <div className="sig anim-fade-up" style={{ animationDelay: "0.24s" }}>
+                  <p className="sig-lbl">Face signal</p>
+                  <p className="sig-val">{cap(latest.face_emotion)}</p>
+                  <p className="sig-meta">{faceObs[latest.face_emotion.toLowerCase()] ?? latest.face_emotion}<br /><strong style={{ color: "var(--ink-2)", fontWeight: 700 }}>{pct(latest.face_confidence)} confidence</strong></p>
+                </div>
+                <div className="sig anim-fade-up" style={{ animationDelay: "0.30s" }}>
+                  <p className="sig-lbl">Voice signal</p>
+                  <p className="sig-val">{cap(latest.voice_emotion)}</p>
+                  <p className="sig-meta">{voiceObs[latest.voice_emotion.toLowerCase()] ?? latest.voice_emotion}<br /><strong style={{ color: "var(--ink-2)", fontWeight: 700 }}>{pct(latest.voice_confidence)} confidence</strong></p>
+                </div>
+              </div>
+            )}
+
+            {/* Recent records */}
+            <div className="pcard anim-fade-up" style={{ animationDelay: "0.32s" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 22, flexWrap: "wrap", gap: 10 }}>
+                <div><p className="p-eye">Activity</p><h2 className="p-title" style={{ marginBottom: 0 }}>Recent records</h2></div>
+                <Badge variant="secondary" style={{ fontSize: "0.71rem", fontWeight: 700 }}>{all.length} total</Badge>
+              </div>
+              {all.length === 0 ? (
+                <div className="empty">
+                  <Brain size={36} style={{ color: "var(--ink-4)", opacity: .4 }} />
+                  <p>Your recent readings will appear here after your first scan.</p>
+                </div>
+              ) : (
+                <div style={{ display: "grid", gap: 8 }}>
+                  {all.slice(0, 8).map((r, i) => (
+                    <div key={r.id} className="rec-row anim-fade-up" style={{ animationDelay: `${i * 0.04}s` }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+                        <span className={cn("pill", pillCls[r.stress_level])}><span className="pill-dot" />{r.stress_level}</span>
+                        <span className="rec-ts hidden sm:block">{new Date(r.timestamp).toLocaleString()}</span>
+                        <span className="rec-ts sm:hidden">{new Date(r.timestamp).toLocaleDateString()}</span>
+                      </div>
+                      <div style={{ display: "flex", gap: 7, flexShrink: 0 }}>
+                        <span className="chip hidden sm:inline">Face {pct(r.face_confidence)}</span>
+                        <span className="chip">Voice {pct(r.voice_confidence)}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </Pane>
+        )}
+
+        {/* ══════════════ SESSION ══════════════ */}
+        {view === "session" && (
+          <Pane>
+            <div className="hero-banner" style={{ marginBottom: 20, alignItems: "center" }}>
+              <div className="hero-inner">
+                <p className="hero-eyebrow">Live capture</p>
+                <h1 className="hero-title">{sesOn ? "Session running" : "Start a scan"}</h1>
+                <p className="hero-sub">{sesTxt}</p>
+              </div>
+              {sesOn && (
+                <div style={{
+                  display: "flex", alignItems: "center", gap: 9, flexShrink: 0,
+                  padding: "10px 18px", borderRadius: 999,
+                  background: "rgba(48,196,154,0.10)", border: "1px solid rgba(48,196,154,0.28)",
+                  color: "var(--green-hi)", fontSize: "0.76rem", fontWeight: 700,
+                  letterSpacing: "0.07em",
+                  fontFamily: "var(--font-heading),'Space Grotesk',system-ui,sans-serif",
+                }}>
+                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--green-hi)", boxShadow: "0 0 10px var(--green-hi)", animation: "dot-breathe 2.2s ease-in-out infinite", display: "inline-block" }} />
+                  LIVE
+                </div>
+              )}
+            </div>
+
+            <div className="ses-grid">
+              {/* Controls */}
+              <div className="pcard" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+                <p style={{ fontSize: "0.82rem", color: "var(--ink-4)", lineHeight: 1.65 }}>
+                  Camera and microphone access requires HTTPS when deployed.
+                </p>
+                {sesErr && (
+                  <div role="alert" className="a-err">
+                    <AlertTriangle size={15} style={{ flexShrink: 0 }} />{sesErr}
+                  </div>
+                )}
+                <div className="ses-btn-group">
+                  {!sesOn ? (
+                    <button disabled={sesBusy} onClick={startSession} className="ses-btn-start">
+                      <Camera size={17} />
+                      {sesBusy ? "Starting…" : "Start session"}
+                    </button>
+                  ) : (
+                    <div className="ses-btn-row">
+                      <button disabled={sesBusy} onClick={scanAgain} className="ses-btn-scan">
+                        <ScanLine size={16} />{sesBusy ? "Scanning…" : "Scan again"}
+                      </button>
+                      <button onClick={stopSession} className="ses-btn-stop">
+                        <StopCircle size={16} />Stop
+                      </button>
+                    </div>
+                  )}
+                </div>
+                {/* Tips */}
+                <div style={{ borderRadius: 18, padding: "18px 20px", background: "rgba(13,21,18,0.03)", border: "1px solid var(--border-soft)" }}>
+                  <p style={{ fontSize: "0.63rem", fontWeight: 600, letterSpacing: "0.13em", textTransform: "uppercase", color: "var(--ink-4)", marginBottom: 14, fontFamily: "var(--font-heading),'Space Grotesk',system-ui,sans-serif" }}>Tips for best results</p>
+                  <ul style={{ listStyle: "none", display: "grid", gap: 10 }}>
+                    {["Face the camera in good light", "Speak at a natural pace", "Minimise background noise", "Stay still during the scan"].map(tip => (
+                      <li key={tip} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: "0.85rem", color: "var(--ink-3)", fontWeight: 500 }}>
+                        <CheckCircle size={13} style={{ color: "var(--green)", flexShrink: 0 }} />{tip}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+
+              {/* Video */}
+              <div className="vid-wrap" style={{ minHeight: 300 }}>
+                <video ref={vidRef} className="vid-el" muted playsInline />
+                {!sesOn && (
+                  <div className="vid-ph">
+                    <div className="vid-ph-inner">
+                      <div className="vid-ph-icon"><Camera size={26} strokeWidth={1.5} /></div>
+                      <span style={{ fontSize: "0.88rem", fontWeight: 700, color: "rgba(255,255,255,0.5)", fontFamily: "var(--font-heading),'Space Grotesk',system-ui,sans-serif" }}>Camera preview</span>
+                      <span style={{ fontSize: "0.77rem", color: "rgba(255,255,255,0.28)" }}>Starts with session</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Result */}
+            <div className="pcard anim-fade-up" style={{ animationDelay: "0.16s" }}>
+              <p className="p-eye">{sesBusy ? "Scanning now" : "Latest result"}</p>
+              {sesBusy ? (
+                <div className="scan-prog" style={{ marginTop: 12 }}>
+                  <div className="pulse-ring" />
+                  <div>
+                    <p style={{ fontSize: "0.95rem", fontWeight: 700, color: "var(--ink)", fontFamily: "var(--font-heading),'Space Grotesk',system-ui,sans-serif", marginBottom: 4 }}>Scanning new sample</p>
+                    <p style={{ fontSize: "0.86rem", color: "var(--ink-3)", marginBottom: 6 }}>{Math.round(SCAN_TOTAL_MS / 1000)}-second capture in progress…</p>
+                    {scanAt && <span style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--ink-4)" }}>Started {new Date(scanAt).toLocaleTimeString()}</span>}
+                  </div>
+                </div>
+              ) : latest ? (
+                <>
+                  <h2 className="p-title" style={{ marginTop: 6 }}>{stressMeta(latest.stress_level).title}</h2>
+                  <p className="p-sub" style={{ marginBottom: 20 }}>{stressMeta(latest.stress_level).summary}</p>
+                  <div className="two-col" style={{ marginBottom: 20 }}>
+                    <div className="sig"><p className="sig-lbl">Face signal</p><p className="sig-val">{cap(latest.face_emotion)}</p><p className="sig-meta">{pct(latest.face_confidence)} confidence</p></div>
+                    <div className="sig"><p className="sig-lbl">Voice signal</p><p className="sig-val">{cap(latest.voice_emotion)}</p><p className="sig-meta">{pct(latest.voice_confidence)} confidence</p></div>
+                  </div>
+                  <div className="guide"><p className="guide-lbl">What this means</p><p className="guide-txt">{stressMeta(latest.stress_level).guidance}</p></div>
+                </>
+              ) : (
+                <div className="empty" style={{ padding: "36px 16px" }}>
+                  <Brain size={32} style={{ color: "var(--ink-4)", opacity: .4 }} />
+                  <p>Your first reading will appear here after a short scan.</p>
+                </div>
+              )}
+            </div>
+          </Pane>
+        )}
+
+        {/* ══════════════ HISTORY ══════════════ */}
+        {view === "history" && (
+          <Pane>
+            <div className="hero-banner" style={{ marginBottom: 20 }}>
+              <div className="hero-inner">
+                <p className="hero-eyebrow">Records</p>
+                <h1 className="hero-title">Reading history</h1>
+                <p className="hero-sub">All your saved stress check-ins — {all.length} readings total.</p>
+                {all.length > 0 && (
+                  <div style={{ display: "flex", gap: 8, marginTop: 20, flexWrap: "wrap" }}>
+                    {(["low", "medium", "high"] as StressLevel[]).map(l => (
+                      <span key={l} className={cn("pill", pillCls[l])}>
+                        <span className="pill-dot" />{cap(l)}: {data.stress_distribution[l]}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="pcard anim-fade-up" style={{ animationDelay: "0.08s" }}>
+              <div className="hist-filters" style={{ marginBottom: 20 }}>
+                <div className="hist-filter-top">
+                  <p style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--ink-4)" }}>
+                    {filtered.length} result{filtered.length !== 1 ? "s" : ""}
+                  </p>
+                </div>
+                <div className="hist-filter-row">
+                  <div className="hist-search">
+                    <Search size={14} style={{ position: "absolute", left: 13, top: "50%", transform: "translateY(-50%)", color: "var(--ink-4)", pointerEvents: "none", zIndex: 1 }} />
+                    <Input placeholder="Search readings…" value={query} onChange={e => setQuery(e.target.value)}
+                      className="pl-9 h-10 text-sm" style={{ borderRadius: 14, width: "100%" }} />
+                  </div>
+                  <div style={{ minWidth: 0, overflow: "hidden" }}>
+                    <Select value={riskF} onValueChange={v => setRiskF(v as typeof riskF)}>
+                      <SelectTrigger className="h-10 text-sm gap-1.5" style={{ borderRadius: 14, width: "100%", minWidth: 0 }}>
+                        <Filter size={13} style={{ color: "var(--ink-4)", flexShrink: 0 }} /><SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All levels</SelectItem>
+                        <SelectItem value="low">Low</SelectItem>
+                        <SelectItem value="medium">Medium</SelectItem>
+                        <SelectItem value="high">High</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ display: "grid", gap: 10 }}>
+                {filtered.length === 0 ? (
+                  <div className="empty">
+                    <Search size={30} style={{ color: "var(--ink-4)", opacity: .38 }} />
+                    <p>Nothing matches. Try adjusting the search or filter.</p>
+                  </div>
+                ) : filtered.map((r, i) => (
+                  <div key={r.id} className="hist anim-fade-up" style={{ animationDelay: `${i * 0.025}s` }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
+                        <span className={cn("pill", pillCls[r.stress_level])}><span className="pill-dot" />{r.stress_level}</span>
+                        <span style={{ fontSize: "0.9rem", fontWeight: 700, color: "var(--ink)", fontFamily: "var(--font-heading),'Space Grotesk',system-ui,sans-serif", letterSpacing: "-0.03em" }}>
+                          {stressMeta(r.stress_level).title}
+                        </span>
+                      </div>
+                      <p style={{ fontSize: "0.8rem", color: "var(--ink-3)", marginBottom: 4 }}>
+                        Face: <strong style={{ color: "var(--ink-2)", fontWeight: 600 }}>{cap(r.face_emotion)}</strong>
+                        {" · "}Voice: <strong style={{ color: "var(--ink-2)", fontWeight: 600 }}>{cap(r.voice_emotion)}</strong>
+                      </p>
+                      <p style={{ fontSize: "0.77rem", color: "var(--ink-4)" }}>
+                        {new Date(r.timestamp).toLocaleString()} · {r.source.replaceAll("_", " ")}
+                      </p>
+                    </div>
+                    <div className="hist-chips">
+                      <span className="chip">Face {pct(r.face_confidence)}</span>
+                      <span className="chip">Voice {pct(r.voice_confidence)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </Pane>
+        )}
+
+        {/* ══════════════ PROFILE ══════════════ */}
+        {view === "profile" && (
+          <Pane>
+            <div className="hero-banner" style={{ marginBottom: 20, alignItems: "center" }}>
+              <div className="hero-inner">
+                <p className="hero-eyebrow">Account</p>
+                <h1 className="hero-title">{user.name}</h1>
+                <p className="hero-sub">@{user.username} · {user.email}</p>
+              </div>
+              <div style={{
+                width: 72, height: 72, borderRadius: 22, flexShrink: 0,
+                background: "rgba(48,196,154,0.12)", border: "1px solid rgba(48,196,154,0.24)",
+                display: "grid", placeItems: "center", color: "var(--green-hi)",
+              }}>
+                <User2 size={32} strokeWidth={1.6} />
+              </div>
+            </div>
+
+            {/* Account details */}
+            <div className="prof-card anim-fade-up" style={{ animationDelay: "0.08s" }}>
+              <div className="prof-card-hd">
+                <div className="prof-icon" style={{ background: "linear-gradient(135deg,var(--green-tint),var(--green-light))", color: "var(--green)", boxShadow: "0 4px 16px rgba(25,121,95,0.14)" }}>
+                  <User2 size={22} />
+                </div>
+                <div>
+                  <p className="prof-lbl-section">Account</p>
+                  <h2 className="prof-card-title">Account details</h2>
+                  <p className="prof-card-sub">Update your display name, username and email address.</p>
+                </div>
+              </div>
+              <form className="prof-form" onSubmit={async e => {
+                e.preventDefault(); setPErr(null); setPMsg(null);
+                try { const u = await updateProfile(token, { name: pName, username: pUser, email: pEmail }); onUserUpdated(u); setPMsg("Profile updated successfully."); }
+                catch (e) { setPErr(e instanceof Error ? e.message : "Could not update profile."); }
+              }}>
+                <div className="prof-field"><Label htmlFor="p-name" className="prof-label">Full name</Label><Input id="p-name" value={pName} onChange={e => setPName(e.target.value)} required className="prof-input" placeholder="Your full name" /></div>
+                <div className="prof-field"><Label htmlFor="p-user" className="prof-label">Username</Label><Input id="p-user" value={pUser} onChange={e => setPUser(e.target.value)} minLength={3} pattern="[a-zA-Z0-9_]+" required className="prof-input" placeholder="your_username" /></div>
+                <div className="prof-field"><Label htmlFor="p-email" className="prof-label">Email address</Label><Input id="p-email" type="email" value={pEmail} onChange={e => setPEmail(e.target.value)} required className="prof-input" placeholder="you@example.com" /></div>
+                {pErr && <div className="a-err"><AlertTriangle size={14} style={{ flexShrink: 0 }} />{pErr}</div>}
+                {pMsg && <div className="a-ok"><CheckCircle size={14} style={{ flexShrink: 0 }} />{pMsg}</div>}
+                <Button type="submit" className="btn-g gap-2 w-full" style={{ height: "3.1rem" }}><Save size={15} />Save changes</Button>
+              </form>
+            </div>
+
+            {/* Password */}
+            <div className="prof-card anim-fade-up" style={{ animationDelay: "0.16s" }}>
+              <div className="prof-card-hd">
+                <div className="prof-icon" style={{ background: "linear-gradient(135deg,var(--amber-tint),var(--amber-light))", color: "var(--amber)", boxShadow: "0 4px 16px rgba(192,120,24,0.14)" }}>
+                  <KeyRound size={22} />
+                </div>
+                <div>
+                  <p className="prof-lbl-section">Security</p>
+                  <h2 className="prof-card-title">Change password</h2>
+                  <p className="prof-card-sub">Use a strong password of at least 8 characters.</p>
+                </div>
+              </div>
+              <form className="prof-form" onSubmit={async e => {
+                e.preventDefault(); setPwErr(null); setPwMsg(null);
+                try { await changePassword(token, { current_password: curPwd, new_password: newPwd }); setCurPwd(""); setNewPwd(""); setPwMsg("Password changed. Signing out shortly…"); window.setTimeout(onLogout, 1400); }
+                catch (e) { setPwErr(e instanceof Error ? e.message : "Could not change password."); }
+              }}>
+                <div className="prof-field">
+                  <Label htmlFor="cur-pwd" className="prof-label">Current password</Label>
+                  <div className="pw-wrap">
+                    <Input id="cur-pwd" type={showC ? "text" : "password"} value={curPwd} onChange={e => setCurPwd(e.target.value)} minLength={8} required className="prof-input" style={{ paddingRight: "3.2rem" }} placeholder="Current password" />
+                    <button type="button" onClick={() => setShowC(v => !v)} className="pw-eye">{showC ? <EyeOff size={16} /> : <Eye size={16} />}</button>
+                  </div>
+                </div>
+                <div className="prof-field">
+                  <Label htmlFor="new-pwd" className="prof-label">New password</Label>
+                  <div className="pw-wrap">
+                    <Input id="new-pwd" type={showN ? "text" : "password"} value={newPwd} onChange={e => setNewPwd(e.target.value)} minLength={8} required className="prof-input" style={{ paddingRight: "3.2rem" }} placeholder="Min. 8 characters" />
+                    <button type="button" onClick={() => setShowN(v => !v)} className="pw-eye">{showN ? <EyeOff size={16} /> : <Eye size={16} />}</button>
+                  </div>
+                </div>
+                {pwErr && <div className="a-err"><AlertTriangle size={14} style={{ flexShrink: 0 }} />{pwErr}</div>}
+                {pwMsg && <div className="a-ok"><CheckCircle size={14} style={{ flexShrink: 0 }} />{pwMsg}</div>}
+                <Button type="submit" className="btn-g gap-2 w-full" style={{ height: "3.1rem" }}><KeyRound size={15} />Update password</Button>
+              </form>
+            </div>
+
+            {/* Logout */}
+            <div className="prof-card anim-fade-up" style={{ animationDelay: "0.24s" }}>
+              <div className="prof-card-hd">
+                <div className="prof-icon" style={{ background: "linear-gradient(135deg,var(--red-tint),var(--red-light))", color: "var(--red)", boxShadow: "0 4px 16px rgba(196,60,52,0.14)" }}>
+                  <LogOut size={22} />
+                </div>
+                <div>
+                  <p className="prof-lbl-section">Session</p>
+                  <h2 className="prof-card-title">Log out</h2>
+                  <p className="prof-card-sub">Sign out of your workspace on this device.</p>
+                </div>
+              </div>
+              <div style={{ padding: "0 28px 28px" }}>
+                <Button variant="outline" onClick={onLogout} className="gap-2 w-full"
+                  style={{ borderColor: "var(--red)", color: "var(--red)", borderRadius: 16, height: "3.1rem", fontWeight: 700, fontFamily: "var(--font-heading),'Space Grotesk',system-ui,sans-serif", letterSpacing: "-0.02em" }}>
+                  <LogOut size={15} />Log out of MindPulse
+                </Button>
+              </div>
+            </div>
+          </Pane>
+        )}
+      </main>
+
+      {/* ─── MOBILE NAV ─── */}
+      <nav className="mob-nav" aria-label="Navigation">
+        {navItems.map(tab => (
+          <button key={tab.key} type="button"
+            className={cn("mob-btn", view === tab.key && "on")}
+            onClick={() => setView(tab.key)}>
+            <span className="mob-icon">{tab.icon}</span>
+            <span className="mob-lbl">{tab.label}</span>
+          </button>
+        ))}
+      </nav>
+    </div>
   );
 }
