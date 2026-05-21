@@ -32,21 +32,95 @@ const SCAN_TOTAL_MS  = SCAN_READY_MS + SCAN_REC_MS;
 const pct = (v: number) => `${Math.round(v * 100)}%`;
 const cap = (s: string)  => s.charAt(0).toUpperCase() + s.slice(1);
 
-function stressMeta(lvl: StressLevel) {
-  if (lvl === "high")   return { title: "Needs a pause",  badge: "High",   summary: "This check-in suggests you may be feeling quite strained right now.", guidance: "Take a short break, slow your breathing, and check in again after a moment.", feeling: "You may be under quite a bit of pressure right now." };
-  if (lvl === "medium") return { title: "A bit tense",    badge: "Medium", summary: "This check-in shows some tension or pressure at the moment.",           guidance: "A short break or a calmer environment may help before the next check-in.", feeling: "There are some signs of tension, but nothing extreme." };
-  return                       { title: "Steady & calm",  badge: "Low",    summary: "This check-in suggests a calmer, more stable state.",                    guidance: "Keep going and scan again whenever you want an update.",                   feeling: "You seem fairly steady at the moment." };
+const HIGH_META = [
+  { title: "You need to step back",      summary: "Your signals are showing significant strain — both face and voice suggest you're under serious pressure right now.", guidance: "Step away from what you're doing, take 5 slow breaths, and give yourself a few minutes of quiet before returning.", feeling: "You're carrying a heavy load right now. Your body is showing it clearly." },
+  { title: "High tension detected",      summary: "Strong stress markers came through in this scan. Your system is in a heightened state of alertness.", guidance: "Try grounding yourself — feel your feet on the floor, take a deep breath, and avoid stimulants like caffeine for now.", feeling: "Your stress levels are elevated. Now's a good time to slow down." },
+  { title: "You're running hot",         summary: "This reading picked up clear signs of overload. Your face and voice are both signalling significant strain.", guidance: "Pause whatever you're doing. Even a 3-minute walk or a cold glass of water can help reset your nervous system.", feeling: "Something's weighing on you heavily right now." },
+  { title: "Your body is under strain",  summary: "This check-in shows a high-stress state. The signals were strong and consistent across both channels.", guidance: "Resist the urge to push through. A proper break — even 10 minutes — will let you come back sharper.", feeling: "High pressure is showing up clearly in your reading." },
+  { title: "Overload — time to pause",   summary: "Both face and voice signals landed in the high-stress range. Your mind and body are asking for a reset.", guidance: "Put your phone or screen away briefly, breathe slowly through your nose, and try to relax your shoulders.", feeling: "You're in the red zone right now. A pause will help." },
+  { title: "Significant stress present", summary: "This scan caught elevated stress markers. You may be feeling overwhelmed, frustrated, or anxious.", guidance: "Name what's stressing you — sometimes just labelling it reduces its grip. Then tackle one small thing at a time.", feeling: "High stress is present. Be gentle with yourself right now." },
+];
+
+const MED_META = [
+  { title: "Some tension showing",       summary: "Your reading shows a moderate stress level. You're not in the red, but there's noticeable pressure building.", guidance: "Take a short break, get some water, and try to reduce the number of things competing for your attention.", feeling: "There's some tension in your system, but it's manageable." },
+  { title: "A little wound up",          summary: "Moderate stress signals came through. Your face and voice both show some strain, but nothing severe.", guidance: "A 5-minute breather, a stretch, or some light music could help bring things back to baseline.", feeling: "You seem a bit wound up — a short pause could do you good." },
+  { title: "Mild pressure detected",     summary: "This check-in suggests you're dealing with some stress. Your system is alert but not overwhelmed.", guidance: "Notice where you're holding tension in your body — your jaw, shoulders, or hands — and consciously relax them.", feeling: "Mild pressure is showing up. You're handling it, but watch the build-up." },
+  { title: "Tension in the mix",         summary: "Some stress markers are present in this reading. Things might feel a bit hectic or demanding right now.", guidance: "Prioritise your next one or two tasks, set the rest aside, and give yourself permission to slow down a little.", feeling: "There's a moderate level of tension — keep an eye on it." },
+  { title: "You're a bit tense",         summary: "Your signals suggest a medium stress state. You're managing, but your face and voice are showing the effort.", guidance: "Check in with yourself: have you eaten, had water, and had a break recently? Small basics matter when stress creeps in.", feeling: "Moderate tension is present. Nothing alarming, but worth acknowledging." },
+  { title: "Pressure is building",       summary: "This scan picked up moderate stress across both channels. You may be feeling stretched or mentally busy.", guidance: "Write down the three most important things you need to do today and focus only on those for now.", feeling: "Your stress is in the middle range — manageable with a little care." },
+];
+
+const LOW_META = [
+  { title: "You're in a calm state",     summary: "This check-in shows a relaxed, low-stress reading. Your face and voice are both settled and composed.", guidance: "Great moment to tackle something that needs focus and clarity — you're in a good headspace.", feeling: "You seem calm and centred right now." },
+  { title: "Steady and balanced",        summary: "Low stress signals across the board. You're in a composed, stable state — keep it up.", guidance: "Use this calm window to plan ahead or work on something important that you've been putting off.", feeling: "Your reading is calm and balanced. Enjoy the clarity." },
+  { title: "All signals look settled",   summary: "Your face and voice both came through relaxed and steady in this scan. You're doing well.", guidance: "Stay hydrated, keep your rhythm, and check in again later to see how things evolve through the day.", feeling: "Everything is looking settled. You're in a good place right now." },
+  { title: "You're doing well",          summary: "This check-in shows a healthy, low-stress reading. Your body and voice are both in a relaxed state.", guidance: "Carry this energy forward — check in again after a demanding task to see how it compares.", feeling: "Low stress all round. You seem to be handling things well." },
+  { title: "Relaxed and grounded",       summary: "No notable stress signals in this reading. You're calm, grounded, and operating from a stable baseline.", guidance: "A great time to do creative or strategic work that benefits from a clear head.", feeling: "You're grounded and relaxed — a solid state to be in." },
+  { title: "Minimal stress detected",    summary: "This scan came back clean — low stress, calm signals, good baseline. Everything looks healthy.", guidance: "Maintain this state by keeping your schedule manageable and taking regular short breaks.", feeling: "Very low stress detected. You seem genuinely at ease." },
+];
+
+function stressMeta(lvl: StressLevel, confidence?: number) {
+  const pool = lvl === "high" ? HIGH_META : lvl === "medium" ? MED_META : LOW_META;
+  const conf = confidence ?? 0.5;
+  const idx = Math.min(Math.floor(conf * pool.length), pool.length - 1);
+  const entry = pool[idx];
+  return { ...entry, badge: lvl === "high" ? "High" : lvl === "medium" ? "Medium" : "Low" };
 }
 
 function heroHeadline(r: InferenceResult | null) {
-  if (!r)                     return "Ready for your first check-in";
-  if (r.stress_level === "high")   return "You may need a short pause";
-  if (r.stress_level === "medium") return "You seem a bit tense right now";
-  return "You seem fairly steady right now";
+  if (!r) return "Ready for your first check-in";
+  const conf = ((r.face_confidence ?? 0) + (r.voice_confidence ?? 0)) / 2;
+  const headlines: Record<StressLevel, string[]> = {
+    high: [
+      "You need a moment to breathe",
+      "High stress — time to slow down",
+      "Your body is asking for a pause",
+      "You're under significant pressure",
+      "Step back and reset",
+    ],
+    medium: [
+      "There's some tension showing",
+      "You seem a bit stretched right now",
+      "Mild pressure in today's reading",
+      "Things feel a little tense",
+      "You're managing, but take it easy",
+    ],
+    low: [
+      "You're calm and in control",
+      "Looking steady — great reading",
+      "All signals point to calm",
+      "You seem relaxed and grounded",
+      "Low stress — keep it up",
+    ],
+  };
+  const pool = headlines[r.stress_level];
+  const idx = Math.min(Math.floor(conf * pool.length), pool.length - 1);
+  return pool[idx];
 }
 
-const faceObs: Record<string, string>  = { calm: "Your face looked calm and settled.", neutral: "Your face looked fairly steady.", happy: "Your face showed positive energy.", sad: "Your face showed signs of low mood.", angry: "Your face showed visible tension.", stressed: "Your face showed visible stress." };
-const voiceObs: Record<string, string> = { calm: "Your voice sounded calm.", neutral: "Your voice sounded steady.", happy: "Your voice sounded upbeat.", sad: "Your voice sounded low or subdued.", angry: "Your voice sounded tense.", stressed: "Your voice sounded pressured." };
+const faceObs: Record<string, string> = {
+  calm:     "Your expression was open and relaxed throughout the scan.",
+  neutral:  "Your face held a composed, neutral expression — no major tension detected.",
+  happy:    "Positive energy came through clearly in your facial expression.",
+  sad:      "Your expression suggested low mood or emotional fatigue.",
+  angry:    "Your face showed signs of frustration or visible tension.",
+  stressed: "Stress markers were evident in your facial expression and micro-movements.",
+  fearful:  "Your face showed signs of anxiety or unease during the scan.",
+  disgusted:"Your expression showed discomfort or a strong aversive reaction.",
+  surprised:"Your face registered surprise or heightened alertness.",
+};
+
+const voiceObs: Record<string, string> = {
+  calm:     "Your voice was measured and relaxed — a strong indicator of low stress.",
+  neutral:  "Your voice sounded steady and even with no notable strain.",
+  happy:    "Your voice carried warmth and positive energy throughout.",
+  sad:      "Your voice sounded flat or subdued, suggesting low emotional energy.",
+  angry:    "Your voice had an edge of tension or frustration to it.",
+  stressed: "Your vocal patterns showed elevated pressure and stress markers.",
+  fearful:  "Your voice carried signs of anxiety or nervousness.",
+  disgusted:"Your voice reflected discomfort or strong negative feeling.",
+  surprised:"Your voice signalled surprise or a sudden shift in alertness.",
+};
 
 const orbCls:  Record<StressLevel, string> = { low: "orb-low", medium: "orb-mid", high: "orb-hi" };
 const pillCls: Record<StressLevel, string> = { low: "pill-low", medium: "pill-mid", high: "pill-hi" };
@@ -70,7 +144,7 @@ function Pane({ children }: { children: ReactNode }) {
 }
 
 /* ════════════════════════════════════════════════════════════════ */
-export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserUpdated, onLogout }: Props) {
+export function Dashboard({ user, token, summary, onRefresh, refreshing: _refreshing, onUserUpdated, onLogout }: Props) {
   const raw   = summary ?? empty();
   const data  = visible(raw, user.id);
   const all   = raw.recent_results;
@@ -110,7 +184,8 @@ export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserU
 
   const latest  = result ?? data.latest_result;
   const lvl     = latest?.stress_level ?? "low";
-  const meta    = stressMeta(lvl);
+  const avgConf = latest ? (latest.face_confidence + latest.voice_confidence) / 2 : 0.5;
+  const meta    = stressMeta(lvl, avgConf);
 
   async function doScan(stream: MediaStream) {
     if (!vidRef.current) throw new Error("Camera not ready.");
@@ -162,18 +237,6 @@ export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserU
     { key: "profile",  label: "Profile",  icon: <User2 size={18} /> },
   ];
 
-  /* ── helpers ── */
-  const HeroBanner = ({ eyebrow, title, sub, right }: { eyebrow: string; title: string; sub: string; right?: ReactNode }) => (
-    <div className="hero-banner">
-      <div className="hero-inner">
-        <p className="hero-eyebrow">{eyebrow}</p>
-        <h1 className="hero-title">{title}</h1>
-        <p className="hero-sub">{sub}</p>
-      </div>
-      {right}
-    </div>
-  );
-
   /* ════════ render ════════ */
   return (
     <div className="db-root">
@@ -195,9 +258,12 @@ export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserU
           ))}
         </nav>
 
+        <div />
+
       </header>
 
       {/* ─── CONTENT ─── */}
+      <div className="db-scroll">
       <main className="db-content">
 
         {/* ══════════════ OVERVIEW ══════════════ */}
@@ -447,13 +513,15 @@ export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserU
                 </div>
               ) : latest ? (
                 <>
-                  <h2 className="p-title" style={{ marginTop: 6 }}>{stressMeta(latest.stress_level).title}</h2>
-                  <p className="p-sub" style={{ marginBottom: 20 }}>{stressMeta(latest.stress_level).summary}</p>
+                  {(() => { const m = stressMeta(latest.stress_level, (latest.face_confidence + latest.voice_confidence) / 2); return (<>
+                  <h2 className="p-title" style={{ marginTop: 6 }}>{m.title}</h2>
+                  <p className="p-sub" style={{ marginBottom: 20 }}>{m.summary}</p>
+                  </>); })()}
                   <div className="two-col" style={{ marginBottom: 20 }}>
                     <div className="sig"><p className="sig-lbl">Face signal</p><p className="sig-val">{cap(latest.face_emotion)}</p><p className="sig-meta">{pct(latest.face_confidence)} confidence</p></div>
                     <div className="sig"><p className="sig-lbl">Voice signal</p><p className="sig-val">{cap(latest.voice_emotion)}</p><p className="sig-meta">{pct(latest.voice_confidence)} confidence</p></div>
                   </div>
-                  <div className="guide"><p className="guide-lbl">What this means</p><p className="guide-txt">{stressMeta(latest.stress_level).guidance}</p></div>
+                  <div className="guide"><p className="guide-lbl">What this means</p><p className="guide-txt">{stressMeta(latest.stress_level, (latest.face_confidence + latest.voice_confidence) / 2).guidance}</p></div>
                 </>
               ) : (
                 <div className="empty" style={{ padding: "36px 16px" }}>
@@ -486,7 +554,7 @@ export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserU
             </div>
 
             <div className="pcard anim-fade-up" style={{ animationDelay: "0.08s" }}>
-              <div className="hist-filters" style={{ marginBottom: 20 }}>
+              <div className="hist-filters">
                 <div className="hist-filter-top">
                   <p style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--ink-4)" }}>
                     {filtered.length} result{filtered.length !== 1 ? "s" : ""}
@@ -494,23 +562,24 @@ export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserU
                 </div>
                 <div className="hist-filter-row">
                   <div className="hist-search">
-                    <Search size={14} style={{ position: "absolute", left: 13, top: "50%", transform: "translateY(-50%)", color: "var(--ink-4)", pointerEvents: "none", zIndex: 1 }} />
-                    <Input placeholder="Search readings…" value={query} onChange={e => setQuery(e.target.value)}
-                      className="pl-9 h-10 text-sm" style={{ borderRadius: 14, width: "100%" }} />
+                    <Search size={14} className="hist-search-icon" />
+                    <input
+                      className="hist-search-input"
+                      placeholder="Search readings…"
+                      value={query}
+                      onChange={e => setQuery(e.target.value)}
+                    />
                   </div>
-                  <div style={{ minWidth: 0, overflow: "hidden" }}>
-                    <Select value={riskF} onValueChange={v => setRiskF(v as typeof riskF)}>
-                      <SelectTrigger className="h-10 text-sm gap-1.5" style={{ borderRadius: 14, width: "100%", minWidth: 0 }}>
-                        <Filter size={13} style={{ color: "var(--ink-4)", flexShrink: 0 }} /><SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All levels</SelectItem>
-                        <SelectItem value="low">Low</SelectItem>
-                        <SelectItem value="medium">Medium</SelectItem>
-                        <SelectItem value="high">High</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
+                  <select
+                    className="hist-native-select"
+                    value={riskF}
+                    onChange={e => setRiskF(e.target.value as typeof riskF)}
+                  >
+                    <option value="all">All levels</option>
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                  </select>
                 </div>
               </div>
 
@@ -526,7 +595,7 @@ export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserU
                       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
                         <span className={cn("pill", pillCls[r.stress_level])}><span className="pill-dot" />{r.stress_level}</span>
                         <span style={{ fontSize: "0.9rem", fontWeight: 700, color: "var(--ink)", fontFamily: "var(--font-heading),'Space Grotesk',system-ui,sans-serif", letterSpacing: "-0.03em" }}>
-                          {stressMeta(r.stress_level).title}
+                          {stressMeta(r.stress_level, (r.face_confidence + r.voice_confidence) / 2).title}
                         </span>
                       </div>
                       <p style={{ fontSize: "0.8rem", color: "var(--ink-3)", marginBottom: 4 }}>
@@ -651,6 +720,7 @@ export function Dashboard({ user, token, summary, onRefresh, refreshing, onUserU
           </Pane>
         )}
       </main>
+      </div>
 
       {/* ─── MOBILE NAV ─── */}
       <nav className="mob-nav" aria-label="Navigation">

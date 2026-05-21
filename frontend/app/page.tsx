@@ -21,7 +21,15 @@ export default function Home() {
     setToken(stored);
     Promise.all([getMe(stored), getDashboardSummary(stored)])
       .then(([u, s]) => { setUser(u); setSummary(s); })
-      .catch(() => { window.localStorage.removeItem(TOKEN_KEY); setToken(null); })
+      .catch((e) => {
+        const msg = e instanceof Error ? e.message : "";
+        const isAuthError = msg.includes("401") || msg.toLowerCase().includes("unauthorized") || msg.toLowerCase().includes("invalid");
+        if (isAuthError) {
+          window.localStorage.removeItem(TOKEN_KEY);
+          setToken(null);
+        }
+        // on network errors keep the stored token so user stays logged in
+      })
       .finally(() => setLoading(false));
   }, []);
 
@@ -55,8 +63,21 @@ export default function Home() {
   }
 
 
-  if (!token || !user) {
+  if (!token) {
     return <AuthPanel onAuthenticated={handleAuthenticated} />;
+  }
+
+  if (!user) {
+    // token exists but user fetch failed (network error) — keep showing loader
+    // so user isn't kicked to login on a bad connection
+    return (
+      <div className="loading-root">
+        <div className="loading-card">
+          <span className="pulse-dot" />
+          Reconnecting…
+        </div>
+      </div>
+    );
   }
 
   return (
