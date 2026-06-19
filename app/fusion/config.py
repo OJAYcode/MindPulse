@@ -12,6 +12,7 @@ DEFAULT_FACE_STRESS_MAP = {
 }
 
 DEFAULT_VOICE_STRESS_MAP = {
+    "not_stressed": 0.12,
     "stressed": 1.0,
     "angry": 0.9,
     "fearful": 0.9,

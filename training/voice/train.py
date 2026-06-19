@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from collections import Counter
+from pathlib import Path
 
 import tensorflow as tf
 
 from app.utils.config import get_settings
 from app.utils.io import write_json
 from app.utils.logging import get_logger
-from training.voice.data import load_voice_dataset
+from training.voice.data import augment_spectrogram_batch, load_voice_dataset
 from training.voice.model import build_voice_model
 
 
@@ -29,15 +30,17 @@ def _compute_class_weights(labels) -> dict[int, float] | None:
 
 
 def train_voice_model(
-    epochs: int = 8,
+    epochs: int = 18,
     batch_size: int = 16,
     demo_mode: bool = False,
     max_files_per_class: int | None = None,
     label_mode: str = "emotion",
+    augment_copies: int = 2,
+    data_dir: Path | None = None,
 ) -> dict:
     settings = get_settings()
     dataset = load_voice_dataset(
-        settings.voice_data_dir,
+        data_dir or settings.voice_data_dir,
         sample_rate=settings.audio_sample_rate,
         demo_mode=demo_mode,
         max_files_per_class=max_files_per_class,
@@ -45,10 +48,15 @@ def train_voice_model(
     )
     model = build_voice_model(dataset.x_train.shape[1:], len(dataset.labels))
     class_weights = None if dataset.synthetic else _compute_class_weights(dataset.y_train)
+    x_train, y_train = dataset.x_train, dataset.y_train
+    if not dataset.synthetic and augment_copies > 0:
+        x_train, y_train = augment_spectrogram_batch(dataset.x_train, dataset.y_train, copies=augment_copies)
+        LOGGER.info("Augmented voice training set from %s to %s samples.", len(dataset.x_train), len(x_train))
     if class_weights:
         LOGGER.info("Using voice class weights: %s", class_weights)
     callbacks = [
-        tf.keras.callbacks.EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True),
+        tf.keras.callbacks.EarlyStopping(monitor="val_loss", patience=7, restore_best_weights=True),
+        tf.keras.callbacks.ReduceLROnPlateau(monitor="val_loss", factor=0.35, patience=3, min_lr=1e-6),
         tf.keras.callbacks.ModelCheckpoint(
             filepath=str(settings.voice_model_path),
             monitor="val_loss",
@@ -57,8 +65,8 @@ def train_voice_model(
         ),
     ]
     history = model.fit(
-        dataset.x_train,
-        dataset.y_train,
+        x_train,
+        y_train,
         validation_data=(dataset.x_val, dataset.y_val),
         epochs=epochs,
         batch_size=batch_size,
@@ -74,6 +82,7 @@ def train_voice_model(
         "synthetic_data": dataset.synthetic,
         "class_weights": class_weights,
         "label_mode": label_mode,
+        "augment_copies": augment_copies,
     }
     write_json(settings.voice_model_path.parent / "voice_training_history.json", history_payload)
     model.save_weights(settings.voice_model_path)

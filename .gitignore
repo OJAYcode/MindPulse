@@ -21,6 +21,8 @@ face_datasets/
 audio_datasets/
 new face_datasets/
 new audio_datasets/
+AffectNet new Facedataset/
+IEMOCAP New Voicedatasets/
 models/*.h5
 models/*.keras
 models/*.pkl
@@ -32,12 +34,17 @@ models/*.pkl
 !models/*.json
 !models/*.png
 !models/*.csv
+models/*.best_*.json
 
 # Node / Next.js
 frontend/node_modules/
 frontend/.next/
 frontend/out/
 frontend/.env.local
+frontend/tsconfig.tsbuildinfo
+*.log
+.claude/
+install-postcss.bat
 
 # OS/editor
 .DS_Store

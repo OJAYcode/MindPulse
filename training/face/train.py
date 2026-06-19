@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from pathlib import Path
 
 import tensorflow as tf
 
@@ -36,16 +37,17 @@ def _compute_class_weights(dataset) -> dict[int, float] | None:
 
 
 def train_face_model(
-    epochs: int = 5,
+    epochs: int = 12,
     batch_size: int = 32,
     demo_mode: bool = False,
     max_files_per_class: int | None = None,
-    fine_tune_epochs: int = 4,
-    fine_tune_layers: int = 60,
+    fine_tune_epochs: int = 12,
+    fine_tune_layers: int = 110,
+    data_dir: Path | None = None,
 ) -> dict:
     settings = get_settings()
     dataset = load_face_dataset(
-        settings.face_data_dir,
+        data_dir or settings.face_data_dir,
         batch_size=batch_size,
         demo_mode=demo_mode,
         max_files_per_class=max_files_per_class,
@@ -60,7 +62,8 @@ def train_face_model(
     if class_weights:
         LOGGER.info("Using face class weights: %s", class_weights)
     callbacks = [
-        tf.keras.callbacks.EarlyStopping(monitor="val_loss", patience=4, restore_best_weights=True),
+        tf.keras.callbacks.EarlyStopping(monitor="val_loss", patience=6, restore_best_weights=True),
+        tf.keras.callbacks.ReduceLROnPlateau(monitor="val_loss", factor=0.35, patience=2, min_lr=1e-6),
         tf.keras.callbacks.CSVLogger(str(settings.face_model_path.parent / "face_training_log.csv")),
         tf.keras.callbacks.ModelCheckpoint(
             filepath=str(settings.face_model_path),
@@ -95,9 +98,10 @@ def train_face_model(
     fine_tune_history = None
     if not dataset.synthetic and fine_tune_epochs > 0:
         unfreeze_face_backbone(model, trainable_layers=fine_tune_layers)
-        compile_face_model(model, learning_rate=1e-4)
+        compile_face_model(model, learning_rate=2e-5)
         fine_tune_callbacks = [
-            tf.keras.callbacks.EarlyStopping(monitor="val_loss", patience=3, restore_best_weights=True),
+            tf.keras.callbacks.EarlyStopping(monitor="val_loss", patience=6, restore_best_weights=True),
+            tf.keras.callbacks.ReduceLROnPlateau(monitor="val_loss", factor=0.35, patience=2, min_lr=5e-7),
             tf.keras.callbacks.CSVLogger(
                 str(settings.face_model_path.parent / "face_training_log.csv"),
                 append=True,

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 
 from app.utils.config import get_settings
@@ -12,10 +14,14 @@ from training.face.model import load_face_model
 LOGGER = get_logger(__name__)
 
 
-def evaluate_face_model(demo_mode: bool = False, max_files_per_class: int | None = None) -> dict:
+def evaluate_face_model(
+    demo_mode: bool = False,
+    max_files_per_class: int | None = None,
+    data_dir: Path | None = None,
+) -> dict:
     settings = get_settings()
     dataset = load_face_dataset(
-        settings.face_data_dir,
+        data_dir or settings.face_data_dir,
         demo_mode=demo_mode,
         max_files_per_class=max_files_per_class,
     )

@@ -5,7 +5,7 @@
     "medium",
     "high"
   ],
-  "training_pairs": 1500,
+  "training_pairs": 3000,
   "demo_mode": false,
   "face_classes": [
     "angry",
@@ -25,11 +25,11 @@
   ],
   "training_target_note": "Targets are generated from the default rule-based late fusion mapping. This logistic model is an optional experimental add-on, not the primary presentation-ready fusion path.",
   "target_distribution": {
-    "low": 177,
-    "medium": 324,
-    "high": 999
+    "low": 126,
+    "medium": 773,
+    "high": 2101
   },
-  "face_max_files_per_class": 1000,
-  "voice_max_files_per_class": 1000,
+  "face_max_files_per_class": 3000,
+  "voice_max_files_per_class": null,
   "voice_label_mode": "stress"
 }

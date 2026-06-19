@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 
 from app.utils.config import get_settings
@@ -16,10 +18,11 @@ def evaluate_voice_model(
     demo_mode: bool = False,
     max_files_per_class: int | None = None,
     label_mode: str = "emotion",
+    data_dir: Path | None = None,
 ) -> dict:
     settings = get_settings()
     dataset = load_voice_dataset(
-        settings.voice_data_dir,
+        data_dir or settings.voice_data_dir,
         sample_rate=settings.audio_sample_rate,
         demo_mode=demo_mode,
         max_files_per_class=max_files_per_class,

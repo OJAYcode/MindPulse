@@ -17,7 +17,7 @@ from app.utils.logging import get_logger
 LOGGER = get_logger(__name__)
 AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".ogg", ".m4a"}
 VOICE_SAMPLE_SEED = 42
-VOICE_CACHE_VERSION = "v2"
+VOICE_CACHE_VERSION = "v5"
 VOICE_STRESS_MAPPING = {
     "angry": "stressed",
     "calm": "calm",
@@ -30,6 +30,18 @@ VOICE_STRESS_MAPPING = {
     "stressed": "stressed",
 }
 STRESS_LABEL_ORDER = ["calm", "neutral", "stressed"]
+BINARY_VOICE_STRESS_MAPPING = {
+    "angry": "stressed",
+    "calm": "not_stressed",
+    "fear": "stressed",
+    "fearful": "stressed",
+    "happy": "not_stressed",
+    "neutral": "not_stressed",
+    "sad": "not_stressed",
+    "stress": "stressed",
+    "stressed": "stressed",
+}
+BINARY_STRESS_LABEL_ORDER = ["not_stressed", "stressed"]
 
 
 @dataclass(slots=True)
@@ -61,6 +73,8 @@ def audio_to_mel_spectrogram(
         target_samples = int(round(len(samples) * sample_rate / float(original_sample_rate)))
         samples = signal.resample(samples, target_samples).astype("float32")
 
+    samples = _prepare_audio_samples(samples)
+
     target_length = int(sample_rate * clip_duration)
     if len(samples) < target_length:
         samples = np.pad(samples, (0, target_length - len(samples)))
@@ -87,6 +101,57 @@ def audio_to_mel_spectrogram(
     mel = mel.numpy()
     mel = (mel - mel.min()) / (mel.max() - mel.min() + 1e-8)
     return mel.astype("float32")[..., np.newaxis]
+
+
+def _prepare_audio_samples(samples: np.ndarray, silence_threshold: float = 0.015) -> np.ndarray:
+    samples = np.asarray(samples, dtype="float32")
+    samples = np.nan_to_num(samples)
+    if samples.size == 0:
+        return samples
+
+    abs_samples = np.abs(samples)
+    active_indices = np.flatnonzero(abs_samples > silence_threshold)
+    if active_indices.size > 0:
+        start = max(int(active_indices[0]) - 1600, 0)
+        end = min(int(active_indices[-1]) + 1600, samples.size)
+        samples = samples[start:end]
+
+    samples = samples - float(np.mean(samples))
+    peak = float(np.max(np.abs(samples))) if samples.size else 0.0
+    if peak > 1e-6:
+        samples = samples / peak * 0.85
+    return samples.astype("float32")
+
+
+def augment_spectrogram_batch(
+    x: np.ndarray,
+    y: np.ndarray,
+    copies: int = 2,
+    seed: int = 42,
+) -> tuple[np.ndarray, np.ndarray]:
+    if copies <= 0:
+        return x, y
+
+    rng = np.random.default_rng(seed)
+    augmented = [x]
+    augmented_labels = [y]
+    for _ in range(copies):
+        noisy = x.copy()
+        noisy += rng.normal(0.0, 0.025, size=noisy.shape).astype("float32")
+
+        for item in noisy:
+            mel_bins, time_bins = item.shape[:2]
+            freq_width = int(rng.integers(3, max(4, mel_bins // 7)))
+            time_width = int(rng.integers(6, max(7, time_bins // 9)))
+            freq_start = int(rng.integers(0, max(1, mel_bins - freq_width)))
+            time_start = int(rng.integers(0, max(1, time_bins - time_width)))
+            item[freq_start : freq_start + freq_width, :, :] *= rng.uniform(0.0, 0.25)
+            item[:, time_start : time_start + time_width, :] *= rng.uniform(0.0, 0.25)
+
+        augmented.append(np.clip(noisy, 0.0, 1.0).astype("float32"))
+        augmented_labels.append(y.copy())
+
+    return np.concatenate(augmented, axis=0), np.concatenate(augmented_labels, axis=0)
 
 
 def _synthetic_voice_dataset(
@@ -145,8 +210,8 @@ def load_voice_dataset(
     settings = get_settings()
     cache_suffix = f"_{max_files_per_class}" if max_files_per_class is not None else ""
     normalized_label_mode = label_mode.lower().strip()
-    if normalized_label_mode not in {"emotion", "stress"}:
-        raise ValueError("label_mode must be either 'emotion' or 'stress'.")
+    if normalized_label_mode not in {"emotion", "stress", "binary_stress"}:
+        raise ValueError("label_mode must be 'emotion', 'stress', or 'binary_stress'.")
     cache_path = settings.voice_processed_dir / (
         f"voice_dataset_cache_{VOICE_CACHE_VERSION}_{normalized_label_mode}{cache_suffix}.npz"
     )
@@ -162,6 +227,12 @@ def load_voice_dataset(
     source_labels = sorted([item.name for item in data_dir.iterdir() if item.is_dir()])
     if normalized_label_mode == "stress":
         labels = [label for label in STRESS_LABEL_ORDER if any(VOICE_STRESS_MAPPING.get(source.lower()) == label for source in source_labels)]
+    elif normalized_label_mode == "binary_stress":
+        labels = [
+            label
+            for label in BINARY_STRESS_LABEL_ORDER
+            if any(BINARY_VOICE_STRESS_MAPPING.get(source.lower()) == label for source in source_labels)
+        ]
     else:
         labels = source_labels
     label_to_index = {label: index for index, label in enumerate(labels)}
@@ -181,7 +252,12 @@ def load_voice_dataset(
     targets: list[int] = []
     grouped_files: dict[str, list[Path]] = {label: [] for label in labels}
     for source_index, source_label in enumerate(source_labels):
-        target_label = VOICE_STRESS_MAPPING.get(source_label.lower(), source_label) if normalized_label_mode == "stress" else source_label
+        if normalized_label_mode == "stress":
+            target_label = VOICE_STRESS_MAPPING.get(source_label.lower(), source_label)
+        elif normalized_label_mode == "binary_stress":
+            target_label = BINARY_VOICE_STRESS_MAPPING.get(source_label.lower(), source_label)
+        else:
+            target_label = source_label
         if target_label not in grouped_files:
             LOGGER.warning("Skipping voice folder '%s' because it does not map to a supported label.", source_label)
             continue

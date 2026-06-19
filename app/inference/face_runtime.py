@@ -8,6 +8,7 @@ import mediapipe as mp
 import numpy as np
 
 from app.utils.io import read_json
+from training.face.data import enhance_face_image
 from training.face.model import load_face_model
 
 
@@ -53,10 +54,10 @@ class FaceRuntime:
         x2 = min(int((bbox.xmin + bbox.width) * width), width)
         y2 = min(int((bbox.ymin + bbox.height) * height), height)
         face = rgb_frame[y1:y2, x1:x2]
-        if face.size == 0:
+        if face.size == 0 or not self._is_usable_face(face, frame.shape[:2]):
             return None
-        face = cv2.resize(face, target_size).astype("float32")
-        return face
+        face = cv2.resize(face, target_size)
+        return enhance_face_image(face)
 
     def _detect_and_crop_with_haar(
         self,
@@ -84,9 +85,24 @@ class FaceRuntime:
         x2 = min(x + width + padding, rgb_frame.shape[1])
         y2 = min(y + height + padding, rgb_frame.shape[0])
         face = rgb_frame[y1:y2, x1:x2]
-        if face.size == 0:
+        if face.size == 0 or not self._is_usable_face(face, frame.shape[:2]):
             return None
-        return cv2.resize(face, target_size).astype("float32")
+        face = cv2.resize(face, target_size)
+        return enhance_face_image(face)
+
+    def _is_usable_face(self, face: np.ndarray, frame_shape: tuple[int, int]) -> bool:
+        frame_height, frame_width = frame_shape
+        face_height, face_width = face.shape[:2]
+        if face_height < 72 or face_width < 72:
+            return False
+        face_area_ratio = (face_height * face_width) / float(max(frame_height * frame_width, 1))
+        if face_area_ratio < 0.025:
+            return False
+
+        gray = cv2.cvtColor(face, cv2.COLOR_RGB2GRAY)
+        brightness = float(np.mean(gray))
+        blur_score = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        return 35.0 <= brightness <= 225.0 and blur_score >= 18.0
 
     def predict_from_face(self, face_image: np.ndarray) -> FacePrediction:
         batch = np.expand_dims(face_image, axis=0)
@@ -106,5 +122,5 @@ class FaceRuntime:
         face_crop = self.detect_and_crop(frame, target_size=target_size)
         if face_crop is None:
             face_crop = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            face_crop = cv2.resize(face_crop, target_size).astype("float32")
+            face_crop = enhance_face_image(cv2.resize(face_crop, target_size))
         return self.predict_from_face(face_crop)

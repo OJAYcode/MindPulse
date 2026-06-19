@@ -52,6 +52,12 @@ These two branches are trained separately. Each branch makes its own prediction 
   - history page
   - mobile bottom navigation
 
+## Project documents
+
+- `PROJECT_PRESENTATION.md` gives a short presentation-ready overview.
+- `PROJECT_RESULTS.md` summarizes the current model results and project discussion.
+- `MODEL_PIPELINE_AND_EVALUATION.md` explains the model-building process, preprocessing, evaluation metrics, and final results in detail.
+
 ## Project structure
 
 ```text
@@ -218,36 +224,53 @@ curl http://127.0.0.1:8000/health
 
 ## Train the models
 
+If new AffectNet/IEMOCAP-style datasets are present in the workspace, prepare them first:
+
+```bash
+python scripts/prepare_new_datasets.py
+```
+
+This can merge supported labels into the existing training folders:
+
+- face: `angry`, `happy`, `neutral`, `sad`
+- voice: `happy`, `neutral`, `sad`, `stressed`
+
+The script writes a preparation report to `data/processed/dataset_prepare_report.json`.
+
+For the latest higher-accuracy training run, clean dataset folders were also prepared under:
+
+- `data/processed/face_affectnet_clean`
+- `data/processed/voice_iemocap_clean`
+
 ### Face model
 
 ```bash
-python scripts/train_face.py --epochs 10 --batch-size 32 --max-files-per-class 3000 --fine-tune-epochs 8 --fine-tune-layers 80
+python scripts/train_face.py --data-dir data/processed/face_affectnet_clean --epochs 12 --batch-size 32 --max-files-per-class 3200 --fine-tune-epochs 12 --fine-tune-layers 110
 ```
 
 Evaluate face model:
 
 ```bash
-python scripts/evaluate_face.py --max-files-per-class 3000
+python scripts/evaluate_face.py --data-dir data/processed/face_affectnet_clean --max-files-per-class 3200
 ```
 
 ### Voice model
 
-By default, the voice branch now trains a simpler stress-tendency classifier:
+By default, the voice branch now trains a simpler binary stress-tendency classifier:
 
-- `calm`
-- `neutral`
+- `not_stressed`
 - `stressed`
 
 This is more reliable for this project than trying to separate many detailed voice emotions.
 
 ```bash
-python scripts/train_voice.py --epochs 30 --batch-size 16 --max-files-per-class 1000 --label-mode stress
+python scripts/train_voice.py --data-dir data/processed/voice_iemocap_clean --epochs 14 --batch-size 32 --max-files-per-class 2994 --label-mode binary_stress --augment-copies 1
 ```
 
 Evaluate voice model:
 
 ```bash
-python scripts/evaluate_voice.py --max-files-per-class 1000 --label-mode stress
+python scripts/evaluate_voice.py --data-dir data/processed/voice_iemocap_clean --max-files-per-class 2994 --label-mode binary_stress
 ```
 
 ### Current local results
@@ -256,8 +279,15 @@ These are the latest local evaluation results after retraining. They are useful 
 
 | Branch | Labels | Accuracy | Precision | Recall | F1 |
 | --- | --- | ---: | ---: | ---: | ---: |
-| Face | angry, happy, neutral, sad | 61.2% | 62.5% | 61.2% | 60.4% |
-| Voice | calm, neutral, stressed | 43.8% | 48.0% | 43.8% | 41.5% |
+| Face | angry, happy, neutral, sad | 81.7% | 82.1% | 81.7% | 81.6% |
+| Voice | not_stressed, stressed | 72.5% | 72.5% | 72.5% | 72.5% |
+
+Recent accuracy-focused improvements:
+
+- Face training now uses a cleaner AffectNet-only four-class folder, lighting normalization, balanced sampling, class weighting, and longer fine-tuning.
+- Voice training now uses the cleaner IEMOCAP-only voice folder, trims silence, normalizes audio, adds light waveform augmentation, and trains a binary stress-tendency CNN.
+- Live inference rejects weak face crops and very quiet microphone samples instead of forcing unreliable predictions.
+- These numbers are still dataset-dependent and should not be presented as medical-grade performance.
 
 ### Fusion
 
@@ -268,8 +298,45 @@ Main method:
 Optional experiment:
 
 ```bash
-python scripts/train_fusion.py --max-pairs 1500 --face-max-files-per-class 750 --voice-max-files-per-class 192
+python scripts/train_fusion.py --max-pairs 3000 --face-max-files-per-class 3200 --voice-max-files-per-class 2994 --voice-label-mode binary_stress
 ```
+
+### True overall multimodal accuracy
+
+To measure the combined face + voice accuracy, add a small paired validation set:
+
+```text
+data/raw/fusion_eval/
+  sample_001/
+    face.jpg
+    voice.wav
+    label.txt
+  sample_002/
+    face.jpg
+    voice.wav
+    label.txt
+```
+
+Each `label.txt` must contain exactly one stress label:
+
+```text
+low
+medium
+high
+```
+
+Then run:
+
+```bash
+python scripts/evaluate_fusion.py
+```
+
+This saves:
+
+- `models/fusion_evaluation.json`
+- `models/fusion_confusion_matrix.png`
+
+This evaluation is optional and does not affect normal model training, the backend, or live inference. It only gives a real combined accuracy score when the paired validation samples are present.
 
 Tune rule-based fusion:
 

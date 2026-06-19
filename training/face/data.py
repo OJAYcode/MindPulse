@@ -17,6 +17,17 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp"}
 FACE_SAMPLE_SEED = 42
 
 
+def enhance_face_image(rgb_image: np.ndarray) -> np.ndarray:
+    """Apply light normalization that is safe for both training and live inference."""
+    image = np.clip(rgb_image, 0, 255).astype("uint8")
+    lab = cv2.cvtColor(image, cv2.COLOR_RGB2LAB)
+    lightness, channel_a, channel_b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=1.8, tileGridSize=(8, 8))
+    lightness = clahe.apply(lightness)
+    enhanced = cv2.merge((lightness, channel_a, channel_b))
+    return cv2.cvtColor(enhanced, cv2.COLOR_LAB2RGB).astype("float32")
+
+
 class FaceDataSequence(tf.keras.utils.Sequence):
     def __init__(
         self,
@@ -53,6 +64,7 @@ class FaceDataSequence(tf.keras.utils.Sequence):
             else:
                 image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
                 image = cv2.resize(image, self.image_size)
+                image = enhance_face_image(image)
             images.append(image.astype("float32"))
 
         return np.asarray(images, dtype="float32"), labels

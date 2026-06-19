@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+import soundfile as sf
 
 from app.utils.io import read_json
 from training.voice.data import audio_to_mel_spectrogram
@@ -44,6 +45,7 @@ class VoiceRuntime:
         import soundfile as sf
 
         sf.write(temp_path, samples, self.sample_rate)
+        self._validate_audio_quality(temp_path)
         mel = audio_to_mel_spectrogram(temp_path, sample_rate=self.sample_rate, clip_duration=self.record_seconds)
         batch = np.expand_dims(mel, axis=0)
         probabilities = self.model.predict(batch, verbose=0)[0]
@@ -56,6 +58,7 @@ class VoiceRuntime:
         )
 
     def predict_from_audio_file(self, audio_path: Path) -> VoicePrediction:
+        self._validate_audio_quality(audio_path)
         mel = audio_to_mel_spectrogram(audio_path, sample_rate=self.sample_rate, clip_duration=self.record_seconds)
         batch = np.expand_dims(mel, axis=0)
         probabilities = self.model.predict(batch, verbose=0)[0]
@@ -66,3 +69,15 @@ class VoiceRuntime:
             confidence=float(probabilities[label_index]),
             probabilities={self.labels[i]: float(probabilities[i]) for i in range(len(probabilities))},
         )
+
+    def _validate_audio_quality(self, audio_path: Path) -> None:
+        samples, _sample_rate = sf.read(audio_path, dtype="float32", always_2d=False)
+        if getattr(samples, "ndim", 1) > 1:
+            samples = samples.mean(axis=1)
+        if samples.size == 0:
+            raise ValueError("The microphone sample is empty. Please try again.")
+        rms = float(np.sqrt(np.mean(np.square(samples))))
+        peak = float(np.max(np.abs(samples)))
+        active_ratio = float(np.mean(np.abs(samples) > 0.01))
+        if rms < 0.003 or peak < 0.02 or active_ratio < 0.04:
+            raise ValueError("The microphone sample was too quiet. Speak clearly and try the scan again.")
